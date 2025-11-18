@@ -3,6 +3,7 @@ import { db } from '../db.js';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { authenticateToken } from './auth.js';
+import { logAudit, getUserInfoForAudit, getClientIp } from '../utils/auditLogger.js';
 
 const router = express.Router();
 
@@ -86,108 +87,115 @@ router.get('/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
-// POST /api/patients/register - Register a new patient
-router.post('/register', async (req, res) => {
+// POST /api/patients/register - Register a new patient (P2.1)
+router.post('/register', authenticateToken, async (req, res) => {
+  const connection = await db.getConnection();
+  
   try {
+    await connection.beginTransaction();
+
+    // Check if user has permission (Admin/Physician only)
+    if (!['admin', 'physician'].includes(req.user.role)) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only administrators and physicians can register patients.',
+      });
+    }
+
     const {
-      // Personal Information
+      // Required fields (P2.1)
       firstName,
       middleName,
       lastName,
       suffix,
       birthDate,
       sex,
+      motherName,
+      fatherName,
+      birthOrder,
+      branch, // facility_id
+
+      // Optional fields
       civilStatus,
       nationality,
-
-      // Contact Information
       contactPhone,
       email,
       currentCity,
       currentProvince,
       philhealthNo,
-      branch,
-
-      // Account Setup
-      username,
-      password,
-      termsConsent,
-      dataConsent,
-      smsConsent,
     } = req.body;
 
-    // Validate required fields
+    // Validate required fields (P2.1)
     if (
       !firstName ||
       !lastName ||
       !birthDate ||
       !sex ||
-      !civilStatus ||
-      !contactPhone ||
-      !email ||
-      !currentCity ||
-      !currentProvince ||
-      !branch ||
-      !username ||
-      !password
+      !motherName ||
+      !fatherName ||
+      birthOrder === undefined || birthOrder === null ||
+      !branch
     ) {
+      await connection.rollback();
       return res.status(400).json({
         success: false,
-        message: 'Missing required fields',
+        message: 'Missing required fields: first_name, last_name, birth_date, sex, mother_name, father_name, birth_order, facility_id',
       });
     }
 
-    // Check if username already exists
-    const [existingUsers] = await db.query(
-      'SELECT user_id FROM users WHERE username = ?',
-      [username]
+    // Validate facility_id exists
+    const [facilities] = await connection.query(
+      'SELECT facility_id FROM facilities WHERE facility_id = ? AND is_active = TRUE',
+      [branch]
     );
 
-    if (existingUsers.length > 0) {
+    if (facilities.length === 0) {
+      await connection.rollback();
       return res.status(400).json({
         success: false,
-        message: 'Username already exists',
+        message: 'Invalid facility/branch selected',
       });
     }
 
-    // Check if email already exists
-    const [existingEmails] = await db.query(
-      'SELECT user_id FROM users WHERE email = ?',
-      [email]
+    const facility_id = facilities[0].facility_id;
+
+    // Generate UIC (P2.1): Mother's first 2 letters + Father's first 2 letters + Birth order + DOB
+    const generateUIC = (motherName, fatherName, birthOrder, birthDate) => {
+      const date = new Date(birthDate);
+      const motherLetters = (motherName ? motherName.substring(0, 2) : 'XX').toUpperCase();
+      const fatherLetters = (fatherName ? fatherName.substring(0, 2) : 'XX').toUpperCase();
+      const birthOrderStr = String(birthOrder || 1).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${motherLetters}${fatherLetters}${birthOrderStr}${month}-${day}-${year}`;
+    };
+
+    const uic = generateUIC(motherName, fatherName, birthOrder, birthDate);
+
+    // Check for duplicate UIC in patients table (D2) (P2.1)
+    const [existingPatients] = await connection.query(
+      'SELECT patient_id FROM patients WHERE uic = ?',
+      [uic]
     );
 
-    if (existingEmails.length > 0) {
-      return res.status(400).json({
+    if (existingPatients.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({
         success: false,
-        message: 'Email already registered',
+        message: 'Patient with this UIC already exists. Please check mother\'s name, father\'s name, birth order, and date of birth.',
       });
     }
-
-    // Start transaction
-    const connection = await db.getConnection();
-    await connection.beginTransaction();
 
     try {
       // Generate UUIDs
-      const userId = crypto.randomUUID();
       const patientId = crypto.randomUUID();
-      const uic = `UIC-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // Create user account
-      await connection.query(
-        `INSERT INTO users 
-        (user_id, username, email, password_hash, role, status, created_at, updated_at) 
-      VALUES (?, ?, ?, ?, 'patient', 'active', NOW(), NOW())`,
-        [userId, username, email, hashedPassword]
-      );
-
-      // Create patient record
+      // Create patient record (P2.1)
       const currentAddress = JSON.stringify({
-        city: currentCity,
-        province: currentProvince,
+        city: currentCity || null,
+        province: currentProvince || null,
       });
 
       await connection.query(
@@ -195,40 +203,76 @@ router.post('/register', async (req, res) => {
         (patient_id, uic, first_name, middle_name, last_name, suffix, 
          birth_date, sex, civil_status, nationality, contact_phone, email, 
          current_address, current_city, current_province, philhealth_no, 
+         mother_name, father_name, birth_order,
          facility_id, created_by, status, created_at, updated_at) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW(), NOW())`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW(), NOW())`,
         [
           patientId,
           uic,
           firstName,
-          middleName,
+          middleName || null,
           lastName,
-          suffix,
+          suffix || null,
           birthDate,
           sex,
-          civilStatus,
-          nationality,
-          contactPhone,
-          email,
+          civilStatus || null,
+          nationality || 'Filipino',
+          contactPhone || null,
+          email || null,
           currentAddress,
-          currentCity,
-          currentProvince,
-          philhealthNo,
-          branch,
-          userId,
+          currentCity || null,
+          currentProvince || null,
+          philhealthNo || null,
+          motherName,
+          fatherName,
+          birthOrder,
+          facility_id,
+          req.user.user_id, // Created by admin/physician
         ]
       );
 
       // Commit transaction
       await connection.commit();
 
+      // Get user info for audit log
+      const userInfo = await getUserInfoForAudit(req.user.user_id);
+
+      // Log audit entry for patient creation (P2.1 - Log to audit_log D8)
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'CREATE',
+        module: 'Patients',
+        entity_type: 'patient',
+        entity_id: patientId,
+        record_id: patientId,
+        new_value: {
+          patient_id: patientId,
+          uic,
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          facility_id,
+        },
+        change_summary: `New patient registered: ${firstName} ${lastName} (UIC: ${uic})`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'] || 'unknown',
+        status: 'success',
+      });
+
+      // Fetch the created patient
+      const [newPatient] = await connection.query(
+        'SELECT * FROM patients WHERE patient_id = ?',
+        [patientId]
+      );
+
       res.status(201).json({
         success: true,
         message: 'Patient registered successfully',
         data: {
+          patient: newPatient[0],
           uic,
-          username,
-          patientId,
         },
       });
     } catch (error) {
@@ -243,11 +287,12 @@ router.post('/register', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error during registration',
+      error: err.message,
     });
   }
 });
 
-// PUT /api/patients/:id - Update patient
+// PUT /api/patients/:id - Update patient (P2.2)
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const {
@@ -267,6 +312,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
       current_city,
       current_province,
       philhealth_no,
+      mother_name,
+      father_name,
+      birth_order,
       guardian_name,
       guardian_relationship,
     } = req.body;
@@ -365,6 +413,21 @@ router.put('/:id', authenticateToken, async (req, res) => {
       updateValues.push(philhealth_no);
     }
 
+    if (mother_name !== undefined) {
+      updateFields.push('mother_name = ?');
+      updateValues.push(mother_name);
+    }
+
+    if (father_name !== undefined) {
+      updateFields.push('father_name = ?');
+      updateValues.push(father_name);
+    }
+
+    if (birth_order !== undefined) {
+      updateFields.push('birth_order = ?');
+      updateValues.push(birth_order);
+    }
+
     updateFields.push('current_address = ?');
     updateValues.push(currentAddress);
 
@@ -395,10 +458,33 @@ router.put('/:id', authenticateToken, async (req, res) => {
       [req.params.id]
     );
 
+    const updatedPatient = updatedPatients[0];
+
+    // Get user info for audit log
+    const userInfo = await getUserInfoForAudit(req.user.user_id);
+
+    // Log audit entry for patient update
+    await logAudit({
+      user_id: userInfo.user_id,
+      user_name: userInfo.user_name,
+      user_role: userInfo.user_role,
+      action: 'UPDATE',
+      module: 'Patients',
+      entity_type: 'patient',
+      entity_id: req.params.id,
+      record_id: req.params.id,
+      old_value: patient,
+      new_value: updatedPatient,
+      change_summary: `Patient updated: ${updatedPatient.first_name} ${updatedPatient.last_name} (UIC: ${updatedPatient.uic})`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
     res.json({
       success: true,
       message: 'Patient updated successfully',
-      patient: updatedPatients[0],
+      patient: updatedPatient,
     });
   } catch (err) {
     console.error('Update patient error:', err);
@@ -429,6 +515,8 @@ router.delete('/:id', authenticateToken, async (req, res) => {
         .json({ success: false, message: 'Patient not found' });
     }
 
+    const patient = patients[0];
+
     // Soft delete - change status to inactive
     await db.query(
       "UPDATE patients SET status = 'inactive', updated_at = NOW() WHERE patient_id = ?",
@@ -440,6 +528,26 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       "UPDATE users SET status = 'inactive' WHERE user_id = (SELECT created_by FROM patients WHERE patient_id = ?)",
       [req.params.id]
     );
+
+    // Get user info for audit log
+    const userInfo = await getUserInfoForAudit(req.user.user_id);
+
+    // Log audit entry for patient deletion
+    await logAudit({
+      user_id: userInfo.user_id,
+      user_name: userInfo.user_name,
+      user_role: userInfo.user_role,
+      action: 'DELETE',
+      module: 'Patients',
+      entity_type: 'patient',
+      entity_id: req.params.id,
+      record_id: req.params.id,
+      old_value: patient,
+      change_summary: `Patient deactivated: ${patient.first_name} ${patient.last_name} (UIC: ${patient.uic})`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
 
     res.json({
       success: true,

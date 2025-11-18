@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Home, BookOpen, Smartphone } from 'lucide-react';
 import '../css/main.css';
 import '../css/components.css';
+import logowoname from '../assets/logowoname.png';
 
 const LoginPage = () => {
   const [formData, setFormData] = useState({
@@ -52,15 +53,12 @@ const LoginPage = () => {
   };
 
   return (
-    <div className="login-page">
+    <div className="login-page" style={{ background: 'linear-gradient(to bottom, #B82132, #D2665A, #F2B28C, #F6DED8)' }}>
       <div className="login-container">
         <div className="login-card">
-          <div className="login-header">
+          <div className="login-header" style={{ background: 'linear-gradient(to bottom, #FFFFFF, #FFF5F5, #FFEBEB, #F6DED8)', color: '#1f2937' }}>
             <div className="logo">
-              <svg width="60" height="60" viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect width="60" height="60" rx="10" fill="#2563eb"/>
-                <path d="M30 15L20 25H26V35H22V45H30V35H34V45H42V35H38V25H44L30 15Z" fill="white"/>
-              </svg>
+              <img src={logowoname} alt="My Hub Cares Logo" style={{ width: '80px', height: '80px', objectFit: 'contain' }} />
             </div>
             <h1>My Hub Cares</h1>
             <p>
@@ -133,16 +131,7 @@ const LoginPage = () => {
               Join our family and experience care that feels like home <Home size={14} />
             </p>
 
-            <div className="mt-2" style={{ paddingTop: '15px', borderTop: '1px solid var(--border-color)' }}>
-              <p className="text-muted" style={{ fontSize: '13px' }}>Patient on mobile?</p>
-              <a
-                href="myhubcares://login"
-                className="btn btn-primary btn-block"
-                style={{ marginTop: '8px', fontSize: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-              >
-                <Smartphone size={16} /> Open Mobile App
-              </a>
-            </div>
+           
           </div>
         </div>
       </div>

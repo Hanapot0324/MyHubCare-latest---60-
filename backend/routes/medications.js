@@ -144,12 +144,132 @@ router.post('/', async (req, res) => {
   }
 });
 
+// In your inventory routes file
+router.post('/with-medication', async (req, res) => {
+  const connection = await db.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+    
+    const {
+      medication_name,
+      generic_name,
+      form,
+      strength,
+      atc_code,
+      is_art,
+      is_controlled,
+      // Inventory fields
+      facility_id,
+      quantity_on_hand,
+      unit,
+      expiry_date,
+      reorder_level,
+      supplier,
+      batch_number,
+      cost_per_unit
+    } = req.body;
+
+    // Check if medication already exists
+    const [existingMed] = await connection.query(
+      'SELECT medication_id FROM medications WHERE medication_name = ? AND form = ? AND strength = ?',
+      [medication_name, form, strength || null]
+    );
+
+    let medication_id;
+
+    if (existingMed.length > 0) {
+      // Use existing medication
+      medication_id = existingMed[0].medication_id;
+    } else {
+      // Create new medication
+      medication_id = uuidv4();
+      await connection.query(
+        `INSERT INTO medications (
+          medication_id, medication_name, generic_name, form,
+          strength, atc_code, is_art, is_controlled, active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          medication_id,
+          medication_name,
+          generic_name || null,
+          form,
+          strength || null,
+          atc_code || null,
+          is_art || false,
+          is_controlled || false,
+          true
+        ]
+      );
+    }
+
+    // Create inventory item
+    const inventory_id = uuidv4();
+    await connection.query(
+      `INSERT INTO medication_inventory (
+        inventory_id, medication_id, facility_id, batch_number,
+        quantity_on_hand, unit, expiry_date, reorder_level,
+        last_restocked, supplier, cost_per_unit
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_DATE, ?, ?)`,
+      [
+        inventory_id,
+        medication_id,
+        facility_id,
+        batch_number || null,
+        quantity_on_hand,
+        unit,
+        expiry_date,
+        reorder_level,
+        supplier || null,
+        cost_per_unit || null
+      ]
+    );
+
+    await connection.commit();
+
+    // Fetch the created inventory with medication details
+    const [result] = await connection.query(
+      `SELECT mi.*, m.medication_name, f.facility_name 
+       FROM medication_inventory mi
+       JOIN medications m ON mi.medication_id = m.medication_id
+       JOIN facilities f ON mi.facility_id = f.facility_id
+       WHERE mi.inventory_id = ?`,
+      [inventory_id]
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Inventory item added successfully',
+      data: result[0]
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Error adding inventory with medication:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add inventory item',
+      error: error.message
+    });
+  } finally {
+    connection.release();
+  }
+});
+
 // Update medication
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { medication_name, generic_name, form, strength, atc_code } =
-      req.body;
+    const {
+      medication_name,
+      generic_name,
+      form,
+      strength,
+      atc_code,
+      is_art,
+      is_controlled,
+      active,
+    } = req.body;
 
     // Check if medication exists
     const [check] = await db.query(
@@ -166,7 +286,7 @@ router.put('/:id', async (req, res) => {
     const query = `
       UPDATE medications SET
         medication_name = ?, generic_name = ?, form = ?,
-        strength = ?, atc_code = ?
+        strength = ?, atc_code = ?, is_art = ?, is_controlled = ?, active = ?
       WHERE medication_id = ?
     `;
 
@@ -176,6 +296,9 @@ router.put('/:id', async (req, res) => {
       form,
       strength || null,
       atc_code || null,
+      is_art || false,
+      is_controlled || false,
+      active !== false,
       id,
     ]);
 

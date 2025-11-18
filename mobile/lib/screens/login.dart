@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
-import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/api_service.dart';
+import 'dashboard.dart';
 
 class Login extends StatefulWidget {
   const Login({Key? key}) : super(key: key); // <- const constructor
@@ -24,7 +26,7 @@ class _LoginState extends State<Login> {
         height: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF2563EB), Color(0xFF1E40AF)],
+            colors: [Color(0xFFB82132), Color(0xFFD2665A)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -35,13 +37,13 @@ class _LoginState extends State<Login> {
             children: [
               const SizedBox(height: 60),
               Column(
-                children: const [
-                  Text(
+                children: [
+                  const Text(
                     '🏠',
                     style: TextStyle(fontSize: 64),
                   ),
-                  SizedBox(height: 15),
-                  Text(
+                  const SizedBox(height: 15),
+                  const Text(
                     'My Hub Cares',
                     style: TextStyle(
                       fontSize: 32,
@@ -198,18 +200,27 @@ class _LoginState extends State<Login> {
                             padding: const EdgeInsets.symmetric(vertical: 18),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12)),
-                            backgroundColor: const Color(0xFF2563EB),
-                            shadowColor: const Color(0xFF2563EB).withOpacity(0.4),
+                            backgroundColor: const Color(0xFFB82132),
+                            shadowColor: const Color(0xFFB82132).withOpacity(0.4),
                             elevation: 4,
                           ),
-                          onPressed: _handleLogin,
-                          child: const Text(
-                            '🚀 Login to My Hub Cares',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                          onPressed: _isLoading ? null : _handleLogin,
+                          child: _isLoading
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  ),
+                                )
+                              : const Text(
+                                  '🚀 Login to My Hub Cares',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                         ),
                       ),
                       const SizedBox(height: 30),
@@ -245,7 +256,7 @@ class _LoginState extends State<Login> {
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            side: const BorderSide(color: Color(0xFF2563EB), width: 2),
+                            side: const BorderSide(color: Color(0xFFB82132), width: 2),
                             backgroundColor: Colors.white,
                           ),
                           onPressed: () {
@@ -256,7 +267,7 @@ class _LoginState extends State<Login> {
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
-                              color: Color(0xFF2563EB),
+                              color: Color(0xFFB82132),
                             ),
                           ),
                         ),
@@ -277,7 +288,7 @@ class _LoginState extends State<Login> {
                             Text(
                               '📱 Demo Patient Account:',
                               style: TextStyle(
-                                  color: Color(0xFF2563EB), fontWeight: FontWeight.bold),
+                                  color: Color(0xFFB82132), fontWeight: FontWeight.bold),
                             ),
                             SizedBox(height: 8),
                             DemoCredentials(),
@@ -296,51 +307,45 @@ class _LoginState extends State<Login> {
     );
   }
 
-  void _handleLogin() {
+  bool _isLoading = false;
+
+  void _handleLogin() async {
     if (!(_formKey.currentState!.validate())) return;
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
-    setState(() => _errorMessage = null);
+    setState(() {
+      _errorMessage = null;
+      _isLoading = true;
+    });
 
-    // Simple API call to backend auth
-    _login(username, password);
-  }
-
-  Future<void> _login(String username, String password) async {
     try {
-      final uri = Uri.parse('http://10.0.2.2:5000/api/auth/login'); // Android emulator localhost
-      final res = await Future.any([
-        Future.delayed(const Duration(seconds: 12), () => throw Exception('Timeout')),
-        _postJson(uri, {
-          'role': 'patient',
-          'username': username,
-          'password': password,
-        })
-      ]);
-
-      if (res['success'] == true && res['token'] != null) {
-        // TODO: persist token securely (e.g., flutter_secure_storage)
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, '/dashboard');
+      final result = await ApiService.login(username, password, role: 'patient');
+      
+      if (!mounted) return;
+      
+      setState(() => _isLoading = false);
+      
+      if (result['success'] == true) {
+        // Save user info to shared preferences
+        final prefs = await SharedPreferences.getInstance();
+        if (result['user'] != null) {
+          await prefs.setString('user', jsonEncode(result['user']));
+        }
+        
+        // Navigate to dashboard
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => Dashboard()),
+        );
       } else {
-        setState(() => _errorMessage = (res['message'] as String?) ?? '❌ Invalid username or password');
+        setState(() => _errorMessage = result['message'] ?? '❌ Invalid username or password');
       }
     } catch (e) {
-      setState(() => _errorMessage = '⚠️ Unable to connect. Please try again.');
-    }
-  }
-
-  Future<Map<String, dynamic>> _postJson(Uri uri, Map<String, dynamic> body) async {
-    final client = HttpClient();
-    try {
-      final req = await client.postUrl(uri);
-      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-      req.add(utf8.encode(const JsonEncoder().convert(body)));
-      final res = await req.close();
-      final text = await res.transform(utf8.decoder).join();
-      return (const JsonDecoder().convert(text) as Map<String, dynamic>);
-    } finally {
-      client.close(force: true);
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = '⚠️ Unable to connect. Please check your connection and try again.';
+      });
     }
   }
 }

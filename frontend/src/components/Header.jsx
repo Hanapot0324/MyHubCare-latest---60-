@@ -4,39 +4,61 @@ import {
   AppBar,
   Toolbar,
   Typography,
-  IconButton,
-  Badge,
   Avatar,
-  Menu,
-  MenuItem,
   Box
 } from '@mui/material';
 import {
-  Notifications as NotificationsIcon,
   AccountCircle
 } from '@mui/icons-material';
 import { Menu as MenuIcon } from 'lucide-react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import NotificationSystem from './NotificationSystem';
+import NotificationSystemStaff from './NotificationSystemStaff';
+import NotificationSystemPatient from './NotificationSystemPatient';
+import logoImage from '../assets/logo.png';
 
 const Logo = () => (
-  <svg width="40" height="40" viewBox="0 0 60 60" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ marginRight: '10px' }}>
-    <rect width="60" height="60" rx="10" fill="#2563eb"/>
-    <path d="M30 15L20 25H26V35H22V45H30V35H34V45H42V35H38V25H44L30 15Z" fill="white"/>
-  </svg>
+  <img 
+    src={logoImage} 
+    alt="My Hub Cares Logo" 
+    style={{ 
+      height: '40px', 
+      width: 'auto', 
+      marginRight: '10px',
+      objectFit: 'contain'
+    }} 
+  />
 );
 
 // Map paths to display names
 const pathNames = {
   '/dashboard': 'Dashboard',
+  '/patient': 'Patients',
   '/patients': 'Patients',
   '/appointments': 'Appointments',
   '/notifications': 'Notifications',
-  '/settings': 'Settings'
+  '/settings': 'Settings',
+  '/profile': 'Profile'
 };
 
-const Header = () => {
+const Header = ({ socket }) => {
   const [anchorEl, setAnchorEl] = React.useState(null);
+  const [userRole, setUserRole] = React.useState(null);
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Get user role from localStorage
+  React.useEffect(() => {
+    const userStr = localStorage.getItem('user');
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        setUserRole(user.role);
+      } catch (e) {
+        console.error('Error parsing user data:', e);
+      }
+    }
+  }, []);
 
   const handleProfileMenuOpen = (event) => {
     setAnchorEl(event.currentTarget);
@@ -57,7 +79,7 @@ const Header = () => {
       sx={{ 
         zIndex: (theme) => theme.zIndex.drawer + 1,
         backgroundColor: '#ffffff',
-        color: '#2563eb',
+        color: '#B82132',
         boxShadow: '0px 1px 3px rgba(0, 0, 0, 0.1)'
       }}
     >
@@ -75,30 +97,21 @@ const Header = () => {
         <Typography variant="body2" sx={{ mr: 2 }}>
           Real-time system statistics and alerts
         </Typography>
-        <Box sx={{ display: 'flex' }}>
-          <IconButton color="inherit">
-            <Badge badgeContent={0} color="error">
-              <NotificationsIcon />
-            </Badge>
-          </IconButton>
-          <IconButton
-            color="inherit"
-            onClick={handleProfileMenuOpen}
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          {userRole === 'patient' ? (
+            <NotificationSystemPatient socket={socket} />
+          ) : (
+            <NotificationSystemStaff socket={socket} />
+          )}
+          <Avatar 
+            sx={{ 
+              bgcolor: '#D84040',
+              ml: 1,
+              cursor: 'default',
+            }}
           >
-            <Avatar sx={{ bgcolor: '#2563eb' }}>
-              <AccountCircle />
-            </Avatar>
-          </IconButton>
-          <Menu
-            anchorEl={anchorEl}
-            open={Boolean(anchorEl)}
-            onClose={handleMenuClose}
-            onClick={handleMenuClose}
-          >
-            <MenuItem onClick={handleMenuClose}>Profile</MenuItem>
-            <MenuItem onClick={handleMenuClose}>My account</MenuItem>
-            <MenuItem onClick={handleMenuClose}>Logout</MenuItem>
-          </Menu>
+            <AccountCircle />
+          </Avatar>
         </Box>
       </Toolbar>
     </AppBar>

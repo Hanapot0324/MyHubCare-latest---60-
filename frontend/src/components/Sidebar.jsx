@@ -13,78 +13,96 @@ import {
   Divider,
 } from '@mui/material';
 import {
-  Home,
-  Users,
-  Calendar,
-  Package,
-  FileText,
-  Pill,
-  Bell,
-  Settings,
-  LogOut,
-  Check,
-} from 'lucide-react';
+  Dashboard as DashboardIcon,
+  People as PeopleIcon,
+  CalendarMonth as CalendarIcon,
+  Inventory as InventoryIcon,
+  Description as DescriptionIcon,
+  Medication as MedicationIcon,
+  Settings as SettingsIcon,
+  Logout as LogoutIcon,
+  CheckCircle as CheckIcon,
+  MedicalServices as MedicalServicesIcon,
+  LocalHospital as HospitalIcon,
+  Science as ScienceIcon,
+  Assignment as AssignmentIcon,
+  ManageAccounts as ManageAccountsIcon,
+  Business as BusinessIcon,
+  Vaccines as VaccinesIcon,
+  Person as PersonIcon,
+} from '@mui/icons-material';
 
 const drawerWidth = 240;
 
-const menuItems = [
-  { text: 'Dashboard', icon: <Home size={20} />, path: '/dashboard' },
-  { text: 'Patients', icon: <Users size={20} />, path: '/patient' },
-  { text: 'Appointments', icon: <Calendar size={20} />, path: '/appointments' },
-  {
-    text: 'Clinical Visit',
-    icon: <Calendar size={20} />,
-    path: '/clinical-visit',
-  },
-  { text: 'Inventory', icon: <Package size={20} />, path: '/inventory' },
-  { text: 'Medication', icon: <Bell size={20} />, path: '/medications' },
-
-  {
-    text: 'Prescriptions',
-    icon: <FileText size={20} />,
-    path: '/prescriptions',
-  },
-  { text: 'ART Regimens', icon: <Pill size={20} />, path: '/art-regimen' },
-  {
-    text: 'Vaccination Program',
-    icon: <Check size={20} />,
-    path: '/vaccination-program',
-  },
-  {
-    text: 'Lab Test ',
-    icon: <Check size={20} />,
-    path: '/lab-test',
-  },
-  {
-    text: 'HTS Sessions ',
-    icon: <Check size={20} />,
-    path: '/hts-sessions',
-  },
-  {
-    text: 'Counseling Sessions ',
-    icon: <Check size={20} />,
-    path: '/counseling',
-  },
-  {
-    text: 'Referrals ',
-    icon: <Check size={20} />,
-    path: '/referrals',
-  },
-
-  { text: 'Branch', icon: <Bell size={20} />, path: '/branch-management' },
-  { text: 'Notifications', icon: <Bell size={20} />, path: '/notifications' },
-  { text: 'Settings', icon: <Settings size={20} />, path: '/settings' },
+// Define menu items with role-based access (removed Medication)
+const allMenuItems = [
+  { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard', roles: ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel', 'patient'] },
+  { text: 'Patients', icon: <PersonIcon />, path: '/patient', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Appointments', icon: <CalendarIcon />, path: '/appointments', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'My Appointments', icon: <CalendarIcon />, path: '/my-appointments', roles: ['patient'] },
+  { text: 'Profile', icon: <PersonIcon />, path: '/profile', roles: ['patient'] },
+  { text: 'Clinical Visit', icon: <MedicalServicesIcon />, path: '/clinical-visit', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Inventory', icon: <InventoryIcon />, path: '/inventory', roles: ['admin', 'nurse', 'lab_personnel'] },
+  { text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Medication Reminder', icon: <MedicationIcon />, path: '/medication-adherence', roles: ['admin', 'physician', 'nurse', 'case_manager', 'patient'] },
+  { text: 'ART Regimens', icon: <MedicationIcon />, path: '/art-regimen', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Vaccination Program', icon: <VaccinesIcon />, path: '/vaccination-program', roles: ['admin', 'physician', 'nurse'] },
+  { text: 'Lab Test', icon: <ScienceIcon />, path: '/lab-test', roles: ['admin', 'physician', 'nurse', 'lab_personnel'] },
+  { text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Counseling Sessions', icon: <PeopleIcon />, path: '/counseling', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Referrals', icon: <HospitalIcon />, path: '/referrals', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Branch', icon: <BusinessIcon />, path: '/branch-management', roles: ['admin'] },
+  { text: 'Settings', icon: <SettingsIcon />, path: '/settings', roles: ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel', 'patient'] },
 ];
 
 const Sidebar = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [userRole, setUserRole] = React.useState(null);
+
+  React.useEffect(() => {
+    // Get user role from localStorage or API
+    const getUserRole = async () => {
+      try {
+        const userStr = localStorage.getItem('user');
+        if (userStr) {
+          const user = JSON.parse(userStr);
+          setUserRole(user.role);
+        } else {
+          // Try to fetch from API
+          const token = localStorage.getItem('token');
+          if (token) {
+            const response = await fetch('http://localhost:5000/api/auth/me', {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            });
+            if (response.ok) {
+              const data = await response.json();
+              if (data.success) {
+                setUserRole(data.user.role);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error getting user role:', error);
+      }
+    };
+    getUserRole();
+  }, []);
+
+  // Filter menu items based on user role
+  const menuItems = userRole
+    ? allMenuItems.filter((item) => item.roles.includes(userRole))
+    : [];
 
   const handleLogout = () => {
-    // Clear any authentication tokens
+    // Clear any authentication tokens and user data
     localStorage.removeItem('token');
-    // Redirect to login page
-    navigate('/login');
+    localStorage.removeItem('user');
+    // Redirect to home page
+    navigate('/');
   };
 
   return (
@@ -109,14 +127,19 @@ const Sidebar = () => {
           variant="h6"
           noWrap
           component="div"
-          sx={{ color: '#2563eb', fontWeight: 600 }}
+          sx={{ color: '#B82132', fontWeight: 600 }}
         >
           My Hub Cares
         </Typography>
       </Toolbar>
       <Box sx={{ overflow: 'auto', flexGrow: 1 }}>
         <List>
-          {menuItems.map((item) => (
+          {menuItems.length === 0 ? (
+            <ListItem>
+              <ListItemText primary="Loading..." />
+            </ListItem>
+          ) : (
+            menuItems.map((item) => (
             <ListItem
               button
               key={item.text}
@@ -128,30 +151,30 @@ const Sidebar = () => {
                 my: 0.5,
                 borderLeft:
                   location.pathname === item.path
-                    ? '4px solid #2563eb'
+                    ? '4px solid #B82132'
                     : '4px solid transparent',
                 transition: 'all 0.2s ease-in-out',
                 '&.Mui-selected': {
-                  backgroundColor: 'transparent',
+                  backgroundColor: 'rgba(184, 33, 50, 0.1)',
                   '&:hover': {
-                    backgroundColor: 'rgba(37, 99, 235, 0.05)',
+                    backgroundColor: 'rgba(184, 33, 50, 0.15)',
                   },
                   '& .MuiListItemIcon-root': {
-                    color: '#2563eb',
+                    color: '#B82132',
                   },
                   '& .MuiListItemText-primary': {
-                    color: '#2563eb',
+                    color: '#B82132',
                     fontWeight: 500,
                   },
                 },
                 '&:hover': {
-                  backgroundColor: 'rgba(37, 99, 235, 0.05)',
-                  borderLeft: '4px solid #2563eb',
+                  backgroundColor: 'rgba(184, 33, 50, 0.05)',
+                  borderLeft: '4px solid #B82132',
                   '& .MuiListItemIcon-root': {
-                    color: '#2563eb',
+                    color: '#B82132',
                   },
                   '& .MuiListItemText-primary': {
-                    color: '#2563eb',
+                    color: '#B82132',
                   },
                 },
               }}
@@ -159,7 +182,7 @@ const Sidebar = () => {
               <ListItemIcon
                 sx={{
                   color:
-                    location.pathname === item.path ? '#2563eb' : '#64748b',
+                    location.pathname === item.path ? '#B82132' : '#64748b',
                   minWidth: 40,
                   transition: 'color 0.2s ease-in-out',
                 }}
@@ -171,14 +194,16 @@ const Sidebar = () => {
                 sx={{
                   '& .MuiListItemText-primary': {
                     color:
-                      location.pathname === item.path ? '#2563eb' : '#333333',
+                      location.pathname === item.path ? '#B82132' : '#333333',
                     fontWeight: location.pathname === item.path ? 500 : 400,
                     transition: 'color 0.2s ease-in-out',
+                    fontSize: '0.875rem', // Reduced font size
                   },
                 }}
               />
             </ListItem>
-          ))}
+            ))
+          )}
         </List>
       </Box>
       <Box sx={{ p: 1, mb: 1 }}>
@@ -189,15 +214,17 @@ const Sidebar = () => {
           sx={{
             borderRadius: 1,
             mx: 1,
+            backgroundColor: '#B82132',
+            color: 'white',
             '&:hover': {
-              backgroundColor: 'rgba(220, 38, 38, 0.05)',
+              backgroundColor: '#8B1A26',
             },
           }}
         >
-          <ListItemIcon sx={{ color: '#ef4444', minWidth: 40 }}>
-            <LogOut size={20} />
+          <ListItemIcon sx={{ color: 'white', minWidth: 40 }}>
+            <LogoutIcon />
           </ListItemIcon>
-          <ListItemText primary="Logout" sx={{ color: '#ef4444' }} />
+          <ListItemText primary="Logout" sx={{ color: 'white' }} />
         </ListItem>
       </Box>
     </Drawer>

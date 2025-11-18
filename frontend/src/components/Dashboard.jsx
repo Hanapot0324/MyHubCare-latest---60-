@@ -1,5 +1,6 @@
 // web/src/components/Dashboard.jsx
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Grid,
@@ -14,17 +15,33 @@ import {
   TableHead,
   TableRow,
   Alert,
-  AlertTitle
+  AlertTitle,
+  Button
 } from '@mui/material';
 import {
   People as PeopleIcon,
   EventAvailable as AppointmentIcon,
   Warning as WarningIcon,
-  Medication as PrescriptionIcon
+  Medication as PrescriptionIcon,
+  CalendarMonth as CalendarIcon,
+  Notifications as BellIcon
 } from '@mui/icons-material';
 import { PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, BarChart, Bar } from 'recharts';
+import { API_BASE_URL } from '../config/api';
 
 const Dashboard = ({ socket }) => {
+  const navigate = useNavigate();
+  const [userRole, setUserRole] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  // Patient-specific data
+  const [upcomingAppointments, setUpcomingAppointments] = useState([]);
+  const [activeReminders, setActiveReminders] = useState([]);
+  const [activePrescriptions, setActivePrescriptions] = useState([]);
+  const [todayMedications, setTodayMedications] = useState([]);
+
+  // Admin/Staff data
   const [stats, setStats] = useState({
     totalPatients: 3,
     todayAppointments: 0,
@@ -67,6 +84,20 @@ const Dashboard = ({ socket }) => {
 
   const [alerts, setAlerts] = useState([]);
 
+  const getAuthToken = () => {
+    return localStorage.getItem('token');
+  };
+
+  useEffect(() => {
+    getCurrentUser();
+  }, []);
+
+  useEffect(() => {
+    if (userRole === 'patient' && currentUser) {
+      fetchPatientData();
+    }
+  }, [userRole, currentUser]);
+
   useEffect(() => {
     // Simulate receiving real-time alerts
     if (socket) {
@@ -81,6 +112,120 @@ const Dashboard = ({ socket }) => {
       }
     };
   }, [socket]);
+
+  const getCurrentUser = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.user) {
+          setCurrentUser(data.user);
+          setUserRole(data.user.role);
+        }
+      }
+    } catch (error) {
+      console.error('Error getting current user:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchPatientData = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token || !currentUser) return;
+
+      const patientId = currentUser.patient?.patient_id || currentUser.patient_id || currentUser.patientId;
+      if (!patientId) return;
+
+      // Fetch appointments
+      const appointmentsResponse = await fetch(`${API_BASE_URL}/appointments`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (appointmentsResponse.ok) {
+        const appointmentsData = await appointmentsResponse.json();
+        if (appointmentsData.success) {
+          const now = new Date();
+          const upcoming = (appointmentsData.data || []).filter(apt => {
+            const aptDate = new Date(apt.scheduled_start);
+            return aptDate >= now && (apt.status === 'scheduled' || apt.status === 'confirmed');
+          }).sort((a, b) => new Date(a.scheduled_start) - new Date(b.scheduled_start));
+          setUpcomingAppointments(upcoming);
+        }
+      }
+
+      // Fetch prescriptions
+      const prescriptionsResponse = await fetch(`${API_BASE_URL}/prescriptions?patient_id=${patientId}&status=active`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (prescriptionsResponse.ok) {
+        const prescriptionsData = await prescriptionsResponse.json();
+        if (prescriptionsData.success) {
+          setActivePrescriptions(prescriptionsData.data || []);
+          
+          // Build today's medications from prescriptions
+          const today = new Date();
+          const todayMeds = [];
+          (prescriptionsData.data || []).forEach(prescription => {
+            if (prescription.items && prescription.items.length > 0) {
+              prescription.items.forEach(item => {
+                // Extract time from frequency or use default
+                let reminderTime = '09:00';
+                if (item.frequency) {
+                  const timeMatch = item.frequency.match(/(\d{1,2}):(\d{2})/);
+                  if (timeMatch) {
+                    reminderTime = timeMatch[0];
+                  }
+                }
+                
+                todayMeds.push({
+                  medication_name: item.medication_name || 'Medication',
+                  dosage: item.dosage || '',
+                  frequency: item.frequency || 'daily',
+                  reminder_time: reminderTime,
+                  prescription_id: prescription.prescription_id
+                });
+              });
+            }
+          });
+          setTodayMedications(todayMeds);
+        }
+      }
+
+      // Fetch reminders (from medication adherence)
+      const remindersResponse = await fetch(`${API_BASE_URL}/prescriptions?patient_id=${patientId}&status=active`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (remindersResponse.ok) {
+        const remindersData = await remindersResponse.json();
+        if (remindersData.success) {
+          const activeRemindersList = [];
+          (remindersData.data || []).forEach(prescription => {
+            if (prescription.items && prescription.items.length > 0) {
+              prescription.items.forEach(item => {
+                activeRemindersList.push({
+                  medication_name: item.medication_name,
+                  reminder_time: item.frequency || 'daily'
+                });
+              });
+            }
+          });
+          setActiveReminders(activeRemindersList);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching patient data:', error);
+    }
+  };
 
   const StatCard = ({ title, value, icon, color }) => (
     <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -102,6 +247,252 @@ const Dashboard = ({ socket }) => {
     </Card>
   );
 
+  // Patient Dashboard
+  if (userRole === 'patient') {
+    const userName = currentUser?.full_name || currentUser?.username || 'Patient';
+    const upcomingCount = upcomingAppointments.length;
+    const remindersCount = activeReminders.length;
+    const prescriptionsCount = activePrescriptions.length;
+
+    return (
+      <Box sx={{ 
+        flexGrow: 1, 
+        p: 3, 
+        backgroundColor: '#F5F5F5',
+        minHeight: '100vh'
+      }}>
+        {/* Welcome Header */}
+        <Box sx={{ mb: 4 }}>
+          <Typography variant="h4" sx={{ fontWeight: 700, color: '#333', mb: 1 }}>
+            Welcome back, {userName.split(' ')[0]}!
+          </Typography>
+          <Typography variant="body1" sx={{ color: '#666', fontSize: '1.1rem' }}>
+            Here's your health summary
+          </Typography>
+        </Box>
+
+        {/* Summary Cards */}
+        <Grid container spacing={3} sx={{ mb: 4 }}>
+          <Grid item xs={12} sm={4}>
+            <Card sx={{ 
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              <CardContent sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 3 }}>
+                <Box>
+                  <Typography variant="h3" sx={{ fontWeight: 700, color: '#333', mb: 1 }}>
+                    {upcomingCount}
+                  </Typography>
+                  <Typography variant="body1" sx={{ color: '#666' }}>
+                    Upcoming Appointments
+                  </Typography>
+                </Box>
+                <Box sx={{ 
+                  width: 48, 
+                  height: 48, 
+                  borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <CalendarIcon sx={{ color: '#FFFFFF', fontSize: 28 }} />
+                </Box>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={4}>
+            <Card sx={{ 
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              <CardContent sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 3 }}>
+                <Box>
+                  <Typography variant="h3" sx={{ fontWeight: 700, color: '#333', mb: 1 }}>
+                    {remindersCount}
+                  </Typography>
+                  <Typography variant="body1" sx={{ color: '#666' }}>
+                    Active Reminders
+                  </Typography>
+                </Box>
+                <Box sx={{ 
+                  width: 48, 
+                  height: 48, 
+                  borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <BellIcon sx={{ color: '#FFFFFF', fontSize: 28 }} />
+                </Box>
+              </CardContent>
+            </Card>
+          </Grid>
+
+          <Grid item xs={12} sm={4}>
+            <Card sx={{ 
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              <CardContent sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 3 }}>
+                <Box>
+                  <Typography variant="h3" sx={{ fontWeight: 700, color: '#333', mb: 1 }}>
+                    {prescriptionsCount}
+                  </Typography>
+                  <Typography variant="body1" sx={{ color: '#666' }}>
+                    Active Prescriptions
+                  </Typography>
+                </Box>
+                <Box sx={{ 
+                  width: 48, 
+                  height: 48, 
+                  borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <PrescriptionIcon sx={{ color: '#FFFFFF', fontSize: 28 }} />
+                </Box>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+
+        {/* Main Content Sections */}
+        <Grid container spacing={3}>
+          {/* Upcoming Appointments */}
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ 
+              p: 3, 
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 700, color: '#333' }}>
+                  Upcoming Appointments
+                </Typography>
+                <Button
+                  variant="contained"
+                  onClick={() => navigate('/my-appointments')}
+                  sx={{
+                    backgroundColor: '#D84040',
+                    color: '#FFFFFF',
+                    borderRadius: '8px',
+                    textTransform: 'none',
+                    px: 2,
+                    '&:hover': {
+                      backgroundColor: '#B82D2D',
+                    }
+                  }}
+                >
+                  Book Appointment
+                </Button>
+              </Box>
+              {upcomingAppointments.length === 0 ? (
+                <Typography sx={{ color: '#666', mt: 2 }}>
+                  No upcoming appointments
+                </Typography>
+              ) : (
+                <Box>
+                  {upcomingAppointments.slice(0, 3).map((apt, index) => {
+                    const aptDate = new Date(apt.scheduled_start);
+                    return (
+                      <Box key={apt.appointment_id || index} sx={{ 
+                        mb: 2, 
+                        p: 2, 
+                        backgroundColor: '#F8F2DE',
+                        borderRadius: '8px'
+                      }}>
+                        <Typography variant="body1" sx={{ fontWeight: 600, color: '#333', mb: 0.5 }}>
+                          {apt.facility_name || 'Appointment'}
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: '#666' }}>
+                          {aptDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} at {aptDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                        </Typography>
+                      </Box>
+                    );
+                  })}
+                </Box>
+              )}
+            </Paper>
+          </Grid>
+
+          {/* Today's Medications */}
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ 
+              p: 3, 
+              backgroundColor: '#FFFFFF',
+              borderRadius: '12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              <Typography variant="h6" sx={{ fontWeight: 700, color: '#333', mb: 2 }}>
+                Today's Medications
+              </Typography>
+              {todayMedications.length === 0 ? (
+                <Typography sx={{ color: '#666', mt: 2 }}>
+                  No medications scheduled for today
+                </Typography>
+              ) : (
+                <Box>
+                  {todayMedications.map((med, index) => (
+                    <Box key={index} sx={{ 
+                      mb: 2, 
+                      p: 2, 
+                      backgroundColor: '#F8F2DE',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <Box>
+                        <Typography variant="body1" sx={{ fontWeight: 600, color: '#333', mb: 0.5 }}>
+                          {med.medication_name}
+                        </Typography>
+                        <Typography variant="body2" sx={{ color: '#666' }}>
+                          Take at {med.reminder_time} daily
+                        </Typography>
+                      </Box>
+                      <Typography variant="h6" sx={{ 
+                        color: '#D84040', 
+                        fontWeight: 700,
+                        fontSize: '1.1rem'
+                      }}>
+                        {med.reminder_time}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+            </Paper>
+          </Grid>
+        </Grid>
+      </Box>
+    );
+  }
+
+  // Admin/Staff Dashboard (existing)
   return (
     <Box sx={{ flexGrow: 1, p: 3 }}>
       <Grid container spacing={3}>

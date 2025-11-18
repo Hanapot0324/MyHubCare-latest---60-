@@ -4,6 +4,11 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
+import '@fontsource/poppins/300.css';
+import '@fontsource/poppins/400.css';
+import '@fontsource/poppins/500.css';
+import '@fontsource/poppins/600.css';
+import '@fontsource/poppins/700.css';
 
 import Login from './components/Login.jsx';
 import PatientRegistration from './components/Register.jsx';
@@ -21,17 +26,42 @@ import Counseling from './components/Counseling.jsx';
 import Referrals from './components/Referrals.jsx';
 import Patients from './components/Patient.jsx';
 import BranchManagement from './components/BranchManagement.jsx';
-import Medications from './components/Medication.jsx';
-const socket = io('http://localhost:5000'); // global socket
+import Profile from './components/Profile.jsx';
+import Settings from './components/Settings.jsx';
+import MedicationAdherence from './components/MedicationAdherence.jsx';
+import MyAppointments from './components/MyAppointments.jsx';
+import ProtectedRoute from './components/ProtectedRoute.jsx';
+import { SOCKET_URL } from './config/api';
+
+const socket = io(SOCKET_URL, {
+  transports: ['websocket', 'polling'],
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionAttempts: 5
+}); // global socket
 
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#1976d2',
+      main: '#B82132',
+      dark: '#8B1A26',
+      light: '#D2665A',
     },
     secondary: {
-      main: '#4caf50',
+      main: '#D2665A',
+      light: '#F2B28C',
     },
+    accent: {
+      main: '#F2B28C',
+      light: '#F6DED8',
+    },
+    background: {
+      default: '#FFFFFF',
+      paper: '#FFFFFF',
+    },
+  },
+  typography: {
+    fontFamily: '"Poppins", "Roboto", "Helvetica", "Arial", sans-serif',
   },
 });
 
@@ -39,6 +69,15 @@ export default function App() {
   useEffect(() => {
     socket.on('connect', () => {
       console.log('🧠 Connected to Socket.IO:', socket.id);
+      console.log('🔗 Socket URL:', socket.io.uri);
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('❌ Socket disconnected:', reason);
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('❌ Socket connection error:', error);
     });
 
     socket.on('newNotification', (data) => {
@@ -46,7 +85,11 @@ export default function App() {
     });
 
     return () => {
-      socket.disconnect();
+      // Don't disconnect socket here as it's used by other components
+      socket.off('connect');
+      socket.off('disconnect');
+      socket.off('connect_error');
+      socket.off('newNotification');
     };
   }, []);
 
@@ -63,7 +106,7 @@ export default function App() {
           <Route
             path="/dashboard"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <Dashboard socket={socket} />
               </MainLayout>
             }
@@ -71,7 +114,7 @@ export default function App() {
           <Route
             path="/patient"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <Patients socket={socket} />
               </MainLayout>
             }
@@ -79,7 +122,7 @@ export default function App() {
           <Route
             path="/appointments"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <Appointments socket={socket} />
               </MainLayout>
             }
@@ -87,7 +130,7 @@ export default function App() {
           <Route
             path="/clinical-visit"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <ClinicalVisits socket={socket} />
               </MainLayout>
             }
@@ -95,7 +138,7 @@ export default function App() {
           <Route
             path="/inventory"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <Inventory socket={socket} />
               </MainLayout>
             }
@@ -104,7 +147,7 @@ export default function App() {
           <Route
             path="/prescriptions"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <Prescriptions socket={socket} />
               </MainLayout>
             }
@@ -113,7 +156,7 @@ export default function App() {
           <Route
             path="/art-regimen"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <ARTRegimenManagement socket={socket} />
               </MainLayout>
             }
@@ -121,7 +164,7 @@ export default function App() {
           <Route
             path="/vaccination-program"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <VaccinationProgram socket={socket} />
               </MainLayout>
             }
@@ -130,7 +173,7 @@ export default function App() {
           <Route
             path="/lab-test"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <LabTests socket={socket} />
               </MainLayout>
             }
@@ -139,7 +182,7 @@ export default function App() {
           <Route
             path="/hts-sessions"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <HTSSessions socket={socket} />
               </MainLayout>
             }
@@ -147,7 +190,7 @@ export default function App() {
           <Route
             path="/counseling"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <Counseling socket={socket} />
               </MainLayout>
             }
@@ -155,7 +198,7 @@ export default function App() {
           <Route
             path="/referrals"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <Referrals socket={socket} />
               </MainLayout>
             }
@@ -164,20 +207,47 @@ export default function App() {
           <Route
             path="/branch-management"
             element={
-              <MainLayout>
+              <MainLayout socket={socket}>
                 <BranchManagement socket={socket} />
               </MainLayout>
             }
           />
-
           <Route
-            path="/medications"
+            path="/profile"
             element={
-              <MainLayout>
-                <Medications socket={socket} />
+              <MainLayout socket={socket}>
+                <Profile socket={socket} />
               </MainLayout>
             }
           />
+          <Route
+            path="/settings"
+            element={
+              <MainLayout socket={socket}>
+                <Settings socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/medication-adherence"
+            element={
+              <MainLayout socket={socket}>
+                <MedicationAdherence socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/my-appointments"
+            element={
+              <MainLayout socket={socket}>
+                <ProtectedRoute allowedRoles={['patient']}>
+                  <MyAppointments socket={socket} />
+                </ProtectedRoute>
+              </MainLayout>
+            }
+          />
+
+          
         </Routes>
       </BrowserRouter>
     </ThemeProvider>

@@ -5,10 +5,10 @@ import Sidebar from './Sidebar';
 import Header from './Header';
 import Footer from './Footer';
 
-const MainLayout = ({ children }) => {
+const MainLayout = ({ children, socket }) => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-      <Header />
+      <Header socket={socket} />
       <Box sx={{ display: 'flex', flexGrow: 1 }}>
         <Sidebar />
         <Box component="main" sx={{ flexGrow: 1, p: 0 }}>

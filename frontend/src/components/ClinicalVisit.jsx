@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Check, Download, Plus, Search, Filter } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -125,43 +127,25 @@ const ClinicalVisits = () => {
         return;
       }
 
-      // Try multiple possible endpoints
-      const endpoints = ['/facilities', '/branches', '/facilities/list'];
-      let data = null;
-      let successEndpoint = null;
+      const response = await fetch(`${API_URL}/facilities`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-      for (const endpoint of endpoints) {
-        try {
-          console.log(`Trying facilities endpoint: ${API_URL}${endpoint}`);
-          const response = await fetch(`${API_URL}${endpoint}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-
-          if (response.ok) {
-            data = await response.json();
-            successEndpoint = endpoint;
-            console.log(`Success with endpoint: ${endpoint}`);
-            break;
-          }
-        } catch (e) {
-          console.log(`Failed endpoint ${endpoint}:`, e.message);
-        }
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      if (!data) {
-        throw new Error('All facility endpoints failed');
-      }
+      const data = await response.json();
+      console.log('Facilities raw data:', data);
 
-      console.log('Facilities raw data from', successEndpoint, ':', data);
-
-      // Handle different response formats
+      // Handle response format: { success: true, data: [...] }
       let facilitiesArray = [];
-      if (Array.isArray(data)) {
+      if (data.success && data.data && Array.isArray(data.data)) {
+        facilitiesArray = data.data;
+      } else if (Array.isArray(data)) {
         facilitiesArray = data;
       } else if (data && typeof data === 'object') {
-        // Try common property names
-        facilitiesArray =
-          data.facilities || data.data || data.results || data.branches || [];
+        facilitiesArray = data.facilities || data.data || data.results || [];
       }
 
       console.log('Facilities array:', facilitiesArray);
@@ -222,7 +206,28 @@ const ClinicalVisits = () => {
 
   const getFacilityName = (facilityId) => {
     const facility = facilities.find((f) => f.facility_id === facilityId);
-    return facility ? facility.name : 'Unknown Facility';
+    return facility ? (facility.facility_name || facility.name) : 'Unknown Facility';
+  };
+
+  // Helper function to decode JWT token and get user_id
+  const getUserIdFromToken = () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return null;
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(
+        atob(base64)
+          .split('')
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+      const decoded = JSON.parse(jsonPayload);
+      return decoded.user_id || null;
+    } catch (error) {
+      console.error('Error decoding token:', error);
+      return null;
+    }
   };
 
   const handleSaveVisit = async (visitData) => {
@@ -236,9 +241,36 @@ const ClinicalVisits = () => {
         return;
       }
 
+      // Get provider_id from token
+      const provider_id = getUserIdFromToken();
+      if (!provider_id) {
+        setToast({
+          message: 'Unable to identify user. Please login again.',
+          type: 'error',
+        });
+        return;
+      }
+
+      // Validate required fields
+      if (!visitData.patient_id) {
+        setToast({
+          message: 'Please select a patient',
+          type: 'error',
+        });
+        return;
+      }
+
+      if (!visitData.facility_id) {
+        setToast({
+          message: 'Please select a facility',
+          type: 'error',
+        });
+        return;
+      }
+
       const transformedData = {
         patient_id: visitData.patient_id,
-        provider_id: visitData.provider_id || 'default-provider', // Add a default or get from user context
+        provider_id: provider_id,
         facility_id: visitData.facility_id,
         visit_date: visitData.visitDate,
         visit_type: visitData.visitType,
@@ -249,18 +281,26 @@ const ClinicalVisits = () => {
         plan: visitData.plan || '',
         follow_up_date: visitData.followUpDate || null,
         follow_up_reason: visitData.followUpReason || '',
-        vital_signs: {
-          systolic_bp: parseInt(
-            visitData.vitalSigns.bloodPressure.split('/')[0]
-          ),
-          diastolic_bp: parseInt(
-            visitData.vitalSigns.bloodPressure.split('/')[1]
-          ),
-          pulse_rate: parseInt(visitData.vitalSigns.heartRate),
-          respiratory_rate: parseInt(visitData.vitalSigns.respiratoryRate),
-          temperature_c: parseFloat(visitData.vitalSigns.temperature),
-          weight_kg: parseFloat(visitData.vitalSigns.weight),
-          height_cm: parseFloat(visitData.vitalSigns.height),
+        vital_signs: visitData.vitalSigns ? {
+          systolic_bp: visitData.vitalSigns.bloodPressure && visitData.vitalSigns.bloodPressure.includes('/') 
+            ? parseInt(visitData.vitalSigns.bloodPressure.split('/')[0]) || 120
+            : 120,
+          diastolic_bp: visitData.vitalSigns.bloodPressure && visitData.vitalSigns.bloodPressure.includes('/')
+            ? parseInt(visitData.vitalSigns.bloodPressure.split('/')[1]) || 80
+            : 80,
+          pulse_rate: visitData.vitalSigns.heartRate ? parseInt(visitData.vitalSigns.heartRate) || 72 : 72,
+          respiratory_rate: visitData.vitalSigns.respiratoryRate ? parseInt(visitData.vitalSigns.respiratoryRate) || 16 : 16,
+          temperature_c: visitData.vitalSigns.temperature ? parseFloat(visitData.vitalSigns.temperature) || 36.5 : 36.5,
+          weight_kg: visitData.vitalSigns.weight ? parseFloat(visitData.vitalSigns.weight) || 65 : 65,
+          height_cm: visitData.vitalSigns.height ? parseFloat(visitData.vitalSigns.height) || 165 : 165,
+        } : {
+          systolic_bp: 120,
+          diastolic_bp: 80,
+          pulse_rate: 72,
+          respiratory_rate: 16,
+          temperature_c: 36.5,
+          weight_kg: 65,
+          height_cm: 165,
         },
         diagnoses: visitData.diagnoses || [],
         procedures: visitData.procedures || [],
@@ -343,8 +383,26 @@ const ClinicalVisits = () => {
         return;
       }
 
+      // Get provider_id from token
+      const provider_id = getUserIdFromToken();
+      if (!provider_id) {
+        setToast({
+          message: 'Unable to identify user. Please login again.',
+          type: 'error',
+        });
+        return;
+      }
+
+      if (!visitData.visit_id) {
+        setToast({
+          message: 'Visit ID is missing. Cannot update visit.',
+          type: 'error',
+        });
+        return;
+      }
+
       const transformedData = {
-        provider_id: visitData.provider_id || 'default-provider',
+        provider_id: provider_id,
         facility_id: visitData.facility_id,
         visit_date: visitData.visitDate,
         visit_type: visitData.visitType,
@@ -355,6 +413,29 @@ const ClinicalVisits = () => {
         plan: visitData.plan || '',
         follow_up_date: visitData.followUpDate || null,
         follow_up_reason: visitData.followUpReason || '',
+        vital_signs: visitData.vitalSigns ? {
+          systolic_bp: visitData.vitalSigns.bloodPressure && visitData.vitalSigns.bloodPressure.includes('/') 
+            ? parseInt(visitData.vitalSigns.bloodPressure.split('/')[0]) || 120
+            : 120,
+          diastolic_bp: visitData.vitalSigns.bloodPressure && visitData.vitalSigns.bloodPressure.includes('/')
+            ? parseInt(visitData.vitalSigns.bloodPressure.split('/')[1]) || 80
+            : 80,
+          pulse_rate: visitData.vitalSigns.heartRate ? parseInt(visitData.vitalSigns.heartRate) || 72 : 72,
+          respiratory_rate: visitData.vitalSigns.respiratoryRate ? parseInt(visitData.vitalSigns.respiratoryRate) || 16 : 16,
+          temperature_c: visitData.vitalSigns.temperature ? parseFloat(visitData.vitalSigns.temperature) || 36.5 : 36.5,
+          weight_kg: visitData.vitalSigns.weight ? parseFloat(visitData.vitalSigns.weight) || 65 : 65,
+          height_cm: visitData.vitalSigns.height ? parseFloat(visitData.vitalSigns.height) || 165 : 165,
+        } : {
+          systolic_bp: 120,
+          diastolic_bp: 80,
+          pulse_rate: 72,
+          respiratory_rate: 16,
+          temperature_c: 36.5,
+          weight_kg: 65,
+          height_cm: 165,
+        },
+        diagnoses: visitData.diagnoses || [],
+        procedures: visitData.procedures || [],
       };
 
       const response = await fetch(
@@ -435,107 +516,382 @@ const ClinicalVisits = () => {
     setShowModal(true);
   };
 
-  const handleEditVisit = (visit) => {
-    setSelectedVisit(visit);
-    setModalMode('edit');
-    setShowModal(true);
-  };
+  const handleSaveDiagnosis = async (visitId, diagnosisData) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setToast({
+          message: 'Please login to save diagnosis',
+          type: 'error',
+        });
+        return;
+      }
 
-  const handleExportPDF = () => {
-    setToast({ message: 'Exporting...', type: 'info' });
-    setTimeout(() => {
-      const pdfContent = generatePDFContent();
-      const blob = new Blob([pdfContent], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'clinical_visits.txt';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setToast({ message: 'Exported successfully', type: 'success' });
-    }, 1500);
-  };
+      // Fetch current visit to get existing diagnoses
+      const visitResponse = await fetch(
+        `${API_URL}/clinical-visits/${visitId}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
 
-  const handleExportSinglePDF = (visit) => {
-    setToast({ message: 'Exporting...', type: 'info' });
-    setTimeout(() => {
-      const pdfContent = generateSinglePDFContent(visit);
-      const blob = new Blob([pdfContent], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `clinical_visit_${visit.patientName.replace(
-        /\s+/g,
-        '_'
-      )}.txt`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      setToast({ message: 'Exported successfully', type: 'success' });
-    }, 1500);
-  };
+      const visitData = await visitResponse.json();
+      if (!visitResponse.ok) {
+        setToast({
+          message: visitData.error || 'Failed to fetch visit',
+          type: 'error',
+        });
+        return;
+      }
 
-  const generatePDFContent = () => {
-    let content = 'CLINICAL VISITS REPORT\n\n';
-    clinicalVisits.forEach((visit, index) => {
-      content += `Visit ${index + 1}\n`;
-      content += `Patient: ${getPatientName(visit.patient_id)}\n`;
-      content += `Facility: ${getFacilityName(visit.facility_id)}\n`;
-      content += `Date: ${formatDate(visit.visit_date)}\n`;
-      content += `Visit Type: ${visit.visit_type}\n`;
-      content += `WHO Stage: ${visit.who_stage}\n`;
-      content += `Chief Complaint: ${visit.chief_complaint}\n`;
-      content += `Notes: ${visit.clinical_notes}\n\n`;
-    });
-    content += `Generated on: ${formatDate(
-      new Date().toISOString().split('T')[0]
-    )}`;
-    return content;
-  };
+      // Add new diagnosis to existing diagnoses
+      const updatedDiagnoses = [
+        ...(visitData.diagnoses || []),
+        {
+          ...diagnosisData,
+          diagnosis_id: '',
+        },
+      ];
 
-  const generateSinglePDFContent = (visit) => {
-    let content = 'CLINICAL VISIT REPORT\n\n';
-    content += `Patient: ${getPatientName(visit.patient_id)}\n`;
-    content += `Facility: ${getFacilityName(visit.facility_id)}\n`;
-    content += `Date: ${formatDate(visit.visit_date)}\n`;
-    content += `Visit Type: ${visit.visit_type}\n`;
-    content += `WHO Stage: ${visit.who_stage}\n`;
-    content += `Chief Complaint: ${visit.chief_complaint}\n`;
-    content += `Assessment: ${visit.assessment}\n`;
-    content += `Plan: ${visit.plan}\n`;
-    content += `Notes: ${visit.clinical_notes}\n\n`;
-
-    if (visit.vital_signs && visit.vital_signs.length > 0) {
-      content += `Vital Signs:\n`;
-      const vital = visit.vital_signs[0];
-      content += `  Blood Pressure: ${vital.systolic_bp}/${vital.diastolic_bp}\n`;
-      content += `  Heart Rate: ${vital.pulse_rate}\n`;
-      content += `  Respiratory Rate: ${vital.respiratory_rate}\n`;
-      content += `  Temperature: ${vital.temperature_c}\n`;
-      content += `  Weight: ${vital.weight_kg}\n`;
-      content += `  Height: ${vital.height_cm}\n`;
-    }
-
-    if (visit.diagnoses && visit.diagnoses.length > 0) {
-      content += `Diagnoses:\n`;
-      visit.diagnoses.forEach((d, i) => {
-        content += `  ${i + 1}. ${d.diagnosis_description}\n`;
+      // Update visit with new diagnoses
+      const response = await fetch(`${API_URL}/clinical-visits/${visitId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          ...visitData,
+          diagnoses: updatedDiagnoses,
+        }),
       });
-    }
 
-    if (visit.procedures && visit.procedures.length > 0) {
-      content += `Procedures:\n`;
-      visit.procedures.forEach((p, i) => {
-        content += `  ${i + 1}. ${p.procedure_name}\n`;
-      });
+      const data = await response.json();
+      if (response.ok) {
+        setToast({
+          message: 'Diagnosis added successfully',
+          type: 'success',
+        });
+        // Refresh visit details
+        const updatedResponse = await fetch(
+          `${API_URL}/clinical-visits/${visitId}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        const updatedData = await updatedResponse.json();
+        if (updatedResponse.ok) {
+          setSelectedVisit(updatedData);
+        }
+      } else {
+        setToast({
+          message: data.error || 'Failed to save diagnosis',
+          type: 'error',
+        });
+      }
+    } catch (error) {
+      console.error('Error saving diagnosis:', error);
+      setToast({ message: 'Failed to save diagnosis', type: 'error' });
     }
-
-    content += `\nGenerated on: ${formatDate(
-      new Date().toISOString().split('T')[0]
-    )}`;
-    return content;
   };
+
+  const handleSaveProcedure = async (visitId, procedureData) => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setToast({
+          message: 'Please login to save procedure',
+          type: 'error',
+        });
+        return;
+      }
+
+      // Fetch current visit to get existing procedures
+      const visitResponse = await fetch(
+        `${API_URL}/clinical-visits/${visitId}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      const visitData = await visitResponse.json();
+      if (!visitResponse.ok) {
+        setToast({
+          message: visitData.error || 'Failed to fetch visit',
+          type: 'error',
+        });
+        return;
+      }
+
+      // Add new procedure to existing procedures
+      const updatedProcedures = [
+        ...(visitData.procedures || []),
+        {
+          ...procedureData,
+          procedure_id: '',
+        },
+      ];
+
+      // Update visit with new procedures
+      const response = await fetch(`${API_URL}/clinical-visits/${visitId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          ...visitData,
+          procedures: updatedProcedures,
+        }),
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        setToast({
+          message: 'Procedure added successfully',
+          type: 'success',
+        });
+        // Refresh visit details
+        const updatedResponse = await fetch(
+          `${API_URL}/clinical-visits/${visitId}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+        const updatedData = await updatedResponse.json();
+        if (updatedResponse.ok) {
+          setSelectedVisit(updatedData);
+        }
+      } else {
+        setToast({
+          message: data.error || 'Failed to save procedure',
+          type: 'error',
+        });
+      }
+    } catch (error) {
+      console.error('Error saving procedure:', error);
+      setToast({ message: 'Failed to save procedure', type: 'error' });
+    }
+  };
+
+  const handleExportPDF = async () => {
+    setToast({ message: 'Exporting...', type: 'info' });
+    try {
+      const filteredVisits = getFilteredVisits();
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      let yPosition = 20;
+      const pageHeight = 297;
+      const margin = 20;
+      const lineHeight = 7;
+
+      filteredVisits.forEach((visit, index) => {
+        if (yPosition > pageHeight - 40) {
+          pdf.addPage();
+          yPosition = 20;
+        }
+
+        pdf.setFontSize(16);
+        pdf.text('CLINICAL VISITS REPORT', margin, yPosition);
+        yPosition += lineHeight * 2;
+
+        pdf.setFontSize(12);
+        pdf.text(`Visit ${index + 1}`, margin, yPosition);
+        yPosition += lineHeight;
+
+        pdf.setFontSize(10);
+        pdf.text(`Patient: ${getPatientName(visit.patient_id)}`, margin, yPosition);
+        yPosition += lineHeight;
+        pdf.text(`Facility: ${getFacilityName(visit.facility_id)}`, margin, yPosition);
+        yPosition += lineHeight;
+        pdf.text(`Date: ${formatDate(visit.visit_date)}`, margin, yPosition);
+        yPosition += lineHeight;
+        pdf.text(`Visit Type: ${visit.visit_type}`, margin, yPosition);
+        yPosition += lineHeight;
+        pdf.text(`WHO Stage: ${visit.who_stage}`, margin, yPosition);
+        yPosition += lineHeight;
+        
+        const complaintLines = pdf.splitTextToSize(
+          `Chief Complaint: ${visit.chief_complaint || 'N/A'}`,
+          170
+        );
+        complaintLines.forEach((line) => {
+          if (yPosition > pageHeight - 20) {
+            pdf.addPage();
+            yPosition = 20;
+          }
+          pdf.text(line, margin, yPosition);
+          yPosition += lineHeight;
+        });
+
+        const notesLines = pdf.splitTextToSize(
+          `Notes: ${visit.clinical_notes || 'No notes'}`,
+          170
+        );
+        notesLines.forEach((line) => {
+          if (yPosition > pageHeight - 20) {
+            pdf.addPage();
+            yPosition = 20;
+          }
+          pdf.text(line, margin, yPosition);
+          yPosition += lineHeight;
+        });
+
+        yPosition += lineHeight;
+      });
+
+      pdf.text(
+        `Generated on: ${formatDate(new Date().toISOString().split('T')[0])}`,
+        margin,
+        yPosition
+      );
+
+      pdf.save('clinical_visits.pdf');
+      setToast({ message: 'Exported successfully', type: 'success' });
+    } catch (error) {
+      console.error('Error exporting PDF:', error);
+      setToast({ message: 'Failed to export PDF', type: 'error' });
+    }
+  };
+
+  const handleExportSinglePDF = async (visit) => {
+    setToast({ message: 'Exporting...', type: 'info' });
+    try {
+      const tempDiv = document.createElement('div');
+      tempDiv.style.position = 'absolute';
+      tempDiv.style.left = '-9999px';
+      tempDiv.style.top = '-9999px';
+      tempDiv.style.width = '800px';
+      tempDiv.style.padding = '20px';
+      tempDiv.style.fontFamily = 'Arial, sans-serif';
+      tempDiv.style.lineHeight = '1.6';
+      tempDiv.style.backgroundColor = 'white';
+      tempDiv.style.fontSize = '14px';
+
+      const patientName = getPatientName(visit.patient_id);
+      const facilityName = getFacilityName(visit.facility_id);
+      const providerName = visit.providerName || 'Unknown Provider';
+
+      tempDiv.innerHTML = `
+        <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #eee; padding-bottom: 20px;">
+          <h1 style="margin: 0 0 10px 0; font-size: 24px;">Clinical Visit Report</h1>
+          <p style="margin: 5px 0;">MyHubCares</p>
+        </div>
+        <div style="margin-bottom: 20px;">
+          <div style="margin-bottom: 10px;"><strong>Patient Name:</strong> ${patientName}</div>
+          <div style="margin-bottom: 10px;"><strong>Visit Date:</strong> ${formatDate(visit.visit_date)}</div>
+          <div style="margin-bottom: 10px;"><strong>Visit Type:</strong> ${visit.visit_type}</div>
+          <div style="margin-bottom: 10px;"><strong>MyHubCares Branch:</strong> ${facilityName}</div>
+          <div style="margin-bottom: 10px;"><strong>Physician:</strong> ${providerName}</div>
+          <div style="margin-bottom: 10px;"><strong>WHO Stage:</strong> ${visit.who_stage}</div>
+        </div>
+        <div style="margin-bottom: 20px;">
+          <strong>Chief Complaint/Symptoms:</strong><br>
+          <div style="margin-top: 5px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+            ${visit.chief_complaint || 'None recorded'}
+          </div>
+        </div>
+        <div style="margin-bottom: 20px;">
+          <strong>Clinical Notes:</strong><br>
+          <div style="margin-top: 5px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+            ${visit.clinical_notes || 'No notes'}
+          </div>
+        </div>
+        ${visit.assessment ? `
+        <div style="margin-bottom: 20px;">
+          <strong>Assessment & Plan:</strong><br>
+          <div style="margin-top: 5px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+            ${visit.assessment}
+            ${visit.plan ? '<br><br><strong>Plan:</strong><br>' + visit.plan : ''}
+          </div>
+        </div>
+        ` : ''}
+        ${visit.vital_signs && visit.vital_signs.length > 0 ? `
+        <div style="margin-bottom: 20px;">
+          <strong>Vital Signs:</strong><br>
+          <div style="margin-top: 5px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+            Blood Pressure: ${visit.vital_signs[0].systolic_bp}/${visit.vital_signs[0].diastolic_bp}<br>
+            Heart Rate: ${visit.vital_signs[0].pulse_rate} bpm<br>
+            Respiratory Rate: ${visit.vital_signs[0].respiratory_rate}<br>
+            Temperature: ${visit.vital_signs[0].temperature_c}°C<br>
+            Weight: ${visit.vital_signs[0].weight_kg} kg<br>
+            Height: ${visit.vital_signs[0].height_cm} cm
+          </div>
+        </div>
+        ` : ''}
+        ${visit.diagnoses && visit.diagnoses.length > 0 ? `
+        <div style="margin-bottom: 20px;">
+          <strong>Diagnoses:</strong><br>
+          <div style="margin-top: 5px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+            ${visit.diagnoses.map((d, i) => `${i + 1}. ${d.diagnosis_description}${d.icd10_code ? ' (ICD-10: ' + d.icd10_code + ')' : ''}`).join('<br>')}
+          </div>
+        </div>
+        ` : ''}
+        ${visit.procedures && visit.procedures.length > 0 ? `
+        <div style="margin-bottom: 20px;">
+          <strong>Procedures:</strong><br>
+          <div style="margin-top: 5px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+            ${visit.procedures.map((p, i) => `${i + 1}. ${p.procedure_name}${p.cpt_code ? ' (CPT: ' + p.cpt_code + ')' : ''}`).join('<br>')}
+          </div>
+        </div>
+        ` : ''}
+        <div style="margin-top: 40px; text-align: right; border-top: 1px solid #eee; padding-top: 20px;">
+          <div style="display: inline-block; text-align: center;">
+            <div style="border-bottom: 1px solid #333; padding-bottom: 5px; margin-bottom: 5px;">
+              ${providerName}
+            </div>
+            <small>Attending Physician</small>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(tempDiv);
+
+      const canvas = await html2canvas(tempDiv, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+      });
+
+      document.body.removeChild(tempDiv);
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      const imgWidth = 210;
+      const pageHeight = 297;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      const fileName = `clinical_visit_${patientName.replace(/\s+/g, '_')}_${formatDate(visit.visit_date).replace(/\//g, '_')}.pdf`;
+      pdf.save(fileName);
+      setToast({ message: 'Exported successfully', type: 'success' });
+    } catch (error) {
+      console.error('Error exporting PDF:', error);
+      setToast({ message: 'Failed to export PDF', type: 'error' });
+    }
+  };
+
 
   const formatDate = (dateString) => {
     const date = new Date(dateString);
@@ -659,34 +1015,6 @@ const ClinicalVisits = () => {
             }}
           >
             View Details
-          </button>
-          <button
-            onClick={() => handleEditVisit(visit)}
-            style={{
-              padding: '8px 16px',
-              background: '#17a2b8',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
-            }}
-          >
-            Edit
-          </button>
-          <button
-            onClick={() => handleDeleteVisit(visit.visit_id)}
-            style={{
-              padding: '8px 16px',
-              background: '#dc3545',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
-            }}
-          >
-            Delete
           </button>
           <button
             onClick={() => handleExportSinglePDF(visit)}
@@ -837,6 +1165,10 @@ const ClinicalVisits = () => {
           onSave={modalMode === 'add' ? handleSaveVisit : handleUpdateVisit}
           patients={patients}
           facilities={facilities}
+          getPatientName={getPatientName}
+          getFacilityName={getFacilityName}
+          onSaveDiagnosis={handleSaveDiagnosis}
+          onSaveProcedure={handleSaveProcedure}
         />
       )}
 
@@ -898,38 +1230,66 @@ const ClinicalVisitModal = ({
   onSave,
   patients,
   facilities,
+  getPatientName,
+  getFacilityName,
+  onSaveDiagnosis,
+  onSaveProcedure,
 }) => {
-  const [formData, setFormData] = useState(
-    visit || {
-      patient_id: '',
-      provider_id: 'default-provider',
-      facility_id: '',
-      visitDate: new Date().toISOString().split('T')[0],
-      visitType: 'initial',
-      whoStage: 'Stage 1',
-      chiefComplaint: '',
-      assessment: '',
-      plan: '',
-      followUpDate: '',
-      followUpReason: '',
-      vitalSigns: {
-        bloodPressure: '120/80',
-        heartRate: '72',
-        respiratoryRate: '16',
-        temperature: '36.5',
-        weight: '65',
-        height: '165',
-      },
-      diagnoses: [],
-      procedures: [],
-      notes: '',
+  // Helper function for date formatting
+  const formatDate = (dateString) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+    });
+  };
+
+  // Default form data structure
+  const getDefaultFormData = () => ({
+    patient_id: '',
+    provider_id: 'default-provider',
+    facility_id: '',
+    visitDate: new Date().toISOString().split('T')[0],
+    visitType: 'initial',
+    whoStage: 'Stage 1',
+    chiefComplaint: '',
+    assessment: '',
+    plan: '',
+    followUpDate: '',
+    followUpReason: '',
+    vitalSigns: {
+      bloodPressure: '',
+      heartRate: '',
+      respiratoryRate: '',
+      temperature: '',
+      weight: '',
+      height: '',
+    },
+    diagnoses: [],
+    procedures: [],
+    notes: '',
+  });
+
+  const [formData, setFormData] = useState(() => {
+    if (!visit) {
+      return getDefaultFormData();
     }
-  );
+    // If visit is provided, ensure vitalSigns is always initialized
+    return {
+      ...getDefaultFormData(),
+      ...visit,
+      vitalSigns: visit.vitalSigns || getDefaultFormData().vitalSigns,
+    };
+  });
 
   useEffect(() => {
-    if (visit) {
+    if (visit && mode !== 'view') {
+      // Only transform data for edit/add mode, not view mode
       setFormData({
         ...visit,
+        visit_id: visit.visit_id || visit.visitId || null,
         patient_id: visit.patient_id || '',
         provider_id: visit.provider_id || 'default-provider',
         facility_id: visit.facility_id || '',
@@ -941,7 +1301,9 @@ const ClinicalVisitModal = ({
         chiefComplaint: visit.chief_complaint || '',
         assessment: visit.assessment || '',
         plan: visit.plan || '',
-        followUpDate: visit.follow_up_date || '',
+        followUpDate: visit.follow_up_date
+          ? new Date(visit.follow_up_date).toISOString().split('T')[0]
+          : '',
         followUpReason: visit.follow_up_reason || '',
         notes: visit.clinical_notes || '',
         vitalSigns:
@@ -967,8 +1329,34 @@ const ClinicalVisitModal = ({
         diagnoses: visit.diagnoses || [],
         procedures: visit.procedures || [],
       });
+    } else if (!visit && mode === 'add') {
+      // Reset form for new visit
+      setFormData({
+        patient_id: '',
+        provider_id: 'default-provider',
+        facility_id: '',
+        visitDate: new Date().toISOString().split('T')[0],
+        visitType: 'initial',
+        whoStage: 'Stage 1',
+        chiefComplaint: '',
+        assessment: '',
+        plan: '',
+        followUpDate: '',
+        followUpReason: '',
+        vitalSigns: {
+          bloodPressure: '',
+          heartRate: '',
+          respiratoryRate: '',
+          temperature: '',
+          weight: '',
+          height: '',
+        },
+        diagnoses: [],
+        procedures: [],
+        notes: '',
+      });
     }
-  }, [visit]);
+  }, [visit, mode]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -982,7 +1370,7 @@ const ClinicalVisitModal = ({
       setFormData({
         ...formData,
         vitalSigns: {
-          ...formData.vitalSigns,
+          ...(formData.vitalSigns || getDefaultFormData().vitalSigns),
           [field]: value,
         },
       });
@@ -1108,379 +1496,16 @@ const ClinicalVisitModal = ({
         </div>
 
         {mode === 'view' ? (
-          <div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Patient Name
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.patientName}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Facility
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.facilityName}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Provider
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.providerName}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Visit Date
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {formatDate(visit.visit_date)}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Visit Type
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.visit_type}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                WHO Stage
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.who_stage}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Chief Complaint
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.chief_complaint}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Assessment
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.assessment || 'None recorded'}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Plan
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.plan || 'None recorded'}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Follow-up
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.follow_up_date
-                  ? `Date: ${formatDate(visit.follow_up_date)}${
-                      visit.follow_up_reason
-                        ? `, Reason: ${visit.follow_up_reason}`
-                        : ''
-                    }`
-                  : 'No follow-up scheduled'}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Vital Signs
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.vital_signs && visit.vital_signs.length > 0 ? (
-                  <>
-                    <div>
-                      BP: {visit.vital_signs[0].systolic_bp}/
-                      {visit.vital_signs[0].diastolic_bp}
-                    </div>
-                    <div>HR: {visit.vital_signs[0].pulse_rate}</div>
-                    <div>RR: {visit.vital_signs[0].respiratory_rate}</div>
-                    <div>Temp: {visit.vital_signs[0].temperature_c}°C</div>
-                    <div>Weight: {visit.vital_signs[0].weight_kg} kg</div>
-                    <div>Height: {visit.vital_signs[0].height_cm} cm</div>
-                  </>
-                ) : (
-                  <div>No vital signs recorded</div>
-                )}
-              </div>
-            </div>
-            <div style={{ marginBottom: '15px' }}>
-              <label
-                style={{
-                  display: 'block',
-                  marginBottom: '5px',
-                  fontWeight: 'bold',
-                  color: '#6c757d',
-                }}
-              >
-                Clinical Notes
-              </label>
-              <div
-                style={{
-                  padding: '8px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                  backgroundColor: '#f8f9fa',
-                }}
-              >
-                {visit.clinical_notes || 'No notes'}
-              </div>
-            </div>
-            {visit.diagnoses && visit.diagnoses.length > 0 && (
-              <div style={{ marginBottom: '15px' }}>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '5px',
-                    fontWeight: 'bold',
-                    color: '#6c757d',
-                  }}
-                >
-                  Diagnoses
-                </label>
-                <div
-                  style={{
-                    padding: '8px',
-                    border: '1px solid #e9ecef',
-                    borderRadius: '4px',
-                    backgroundColor: '#f8f9fa',
-                  }}
-                >
-                  {visit.diagnoses.map((d, i) => (
-                    <div key={i} style={{ marginBottom: '5px' }}>
-                      {d.diagnosis_description}
-                      {d.icd10_code && <span> (ICD-10: {d.icd10_code})</span>}
-                      {d.diagnosis_type && (
-                        <span> - Type: {d.diagnosis_type}</span>
-                      )}
-                      {d.is_chronic && <span> - Chronic</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {visit.procedures && visit.procedures.length > 0 && (
-              <div style={{ marginBottom: '15px' }}>
-                <label
-                  style={{
-                    display: 'block',
-                    marginBottom: '5px',
-                    fontWeight: 'bold',
-                    color: '#6c757d',
-                  }}
-                >
-                  Procedures
-                </label>
-                <div
-                  style={{
-                    padding: '8px',
-                    border: '1px solid #e9ecef',
-                    borderRadius: '4px',
-                    backgroundColor: '#f8f9fa',
-                  }}
-                >
-                  {visit.procedures.map((p, i) => (
-                    <div key={i} style={{ marginBottom: '5px' }}>
-                      {p.procedure_name}
-                      {p.cpt_code && <span> (CPT: {p.cpt_code})</span>}
-                      {p.performed_at && (
-                        <span> - Performed: {formatDate(p.performed_at)}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: '10px',
-                marginTop: '20px',
-              }}
-            >
-              <button
-                onClick={onClose}
-                style={{
-                  padding: '8px 16px',
-                  background: '#6c757d',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                }}
-              >
-                Close
-              </button>
-            </div>
-          </div>
+         <VisitDetailsView
+            visit={visit}
+            getPatientName={getPatientName}
+            getFacilityName={getFacilityName}
+            formatDate={formatDate}
+            onClose={onClose}
+            onSaveDiagnosis={onSaveDiagnosis}    // ✅ Use the prop name
+            onSaveProcedure={onSaveProcedure}    // ✅ Use the prop name
+            validDiagnosisTypes={validDiagnosisTypes}
+          />
         ) : (
           <form onSubmit={handleSubmit}>
             <div style={{ marginBottom: '15px' }}>
@@ -1546,7 +1571,7 @@ const ClinicalVisitModal = ({
                     key={facility.facility_id}
                     value={facility.facility_id}
                   >
-                    {facility.name}
+                    {facility.facility_name || facility.name}
                   </option>
                 ))}
               </select>
@@ -1773,6 +1798,7 @@ const ClinicalVisitModal = ({
               </div>
             </div>
 
+            {/* Vital Signs */}
             <div style={{ marginBottom: '15px' }}>
               <label
                 style={{
@@ -1792,14 +1818,14 @@ const ClinicalVisitModal = ({
               >
                 <div>
                   <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                    Blood Pressure
+                    Blood Pressure {/* e.g., 120/80 */}
                   </label>
                   <input
                     type="text"
                     name="vitalSigns.bloodPressure"
-                    value={formData.vitalSigns.bloodPressure}
+                    value={formData.vitalSigns?.bloodPressure || ''}
                     onChange={handleChange}
-                    placeholder="120/80"
+                    placeholder=""
                     style={{
                       width: '100%',
                       padding: '6px',
@@ -1811,14 +1837,14 @@ const ClinicalVisitModal = ({
                 </div>
                 <div>
                   <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                    Heart Rate
+                    Heart Rate {/* e.g., 72 */}
                   </label>
                   <input
                     type="text"
                     name="vitalSigns.heartRate"
-                    value={formData.vitalSigns.heartRate}
+                    value={formData.vitalSigns?.heartRate || ''}
                     onChange={handleChange}
-                    placeholder="72"
+                    placeholder=""
                     style={{
                       width: '100%',
                       padding: '6px',
@@ -1830,14 +1856,14 @@ const ClinicalVisitModal = ({
                 </div>
                 <div>
                   <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                    Respiratory Rate
+                    Respiratory Rate {/* e.g., 16 */}
                   </label>
                   <input
                     type="text"
                     name="vitalSigns.respiratoryRate"
-                    value={formData.vitalSigns.respiratoryRate}
+                    value={formData.vitalSigns?.respiratoryRate || ''}
                     onChange={handleChange}
-                    placeholder="16"
+                    placeholder=""
                     style={{
                       width: '100%',
                       padding: '6px',
@@ -1849,14 +1875,14 @@ const ClinicalVisitModal = ({
                 </div>
                 <div>
                   <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                    Temperature (°C)
+                    Temperature (°C) {/* e.g., 36.5 */}
                   </label>
                   <input
                     type="text"
                     name="vitalSigns.temperature"
-                    value={formData.vitalSigns.temperature}
+                    value={formData.vitalSigns?.temperature || ''}
                     onChange={handleChange}
-                    placeholder="36.5"
+                    placeholder=""
                     style={{
                       width: '100%',
                       padding: '6px',
@@ -1868,14 +1894,14 @@ const ClinicalVisitModal = ({
                 </div>
                 <div>
                   <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                    Weight (kg)
+                    Weight (kg) {/* e.g., 65 */}
                   </label>
                   <input
                     type="text"
                     name="vitalSigns.weight"
-                    value={formData.vitalSigns.weight}
+                    value={formData.vitalSigns?.weight || ''}
                     onChange={handleChange}
-                    placeholder="65"
+                    placeholder=""
                     style={{
                       width: '100%',
                       padding: '6px',
@@ -1887,14 +1913,14 @@ const ClinicalVisitModal = ({
                 </div>
                 <div>
                   <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                    Height (cm)
+                    Height (cm) {/* e.g., 165 */}
                   </label>
                   <input
                     type="text"
                     name="vitalSigns.height"
-                    value={formData.vitalSigns.height}
+                    value={formData.vitalSigns?.height || ''}
                     onChange={handleChange}
-                    placeholder="165"
+                    placeholder=""
                     style={{
                       width: '100%',
                       padding: '6px',
@@ -1931,425 +1957,476 @@ const ClinicalVisitModal = ({
               />
             </div>
 
-            <div style={{ marginBottom: '15px' }}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '10px',
-                }}
-              >
-                <label
-                  style={{
-                    display: 'block',
-                    fontWeight: 'bold',
-                  }}
-                >
-                  Diagnoses
-                </label>
-                <button
-                  type="button"
-                  onClick={handleAddDiagnosis}
-                  style={{
-                    padding: '5px 10px',
-                    background: '#17a2b8',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                  }}
-                >
-                  Add Diagnosis
-                </button>
-              </div>
-              {formData.diagnoses.map((diagnosis, index) => (
+            {mode === 'add' && (
+              <div style={{ marginBottom: '15px' }}>
                 <div
-                  key={index}
                   style={{
-                    border: '1px solid #e9ecef',
+                    padding: '12px',
+                    backgroundColor: '#e7f3ff',
+                    borderLeft: '4px solid #007bff',
                     borderRadius: '4px',
-                    padding: '10px',
-                    marginBottom: '10px',
                   }}
                 >
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      marginBottom: '10px',
-                    }}
-                  >
-                    <h4 style={{ margin: 0 }}>Diagnosis {index + 1}</h4>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveDiagnosis(index)}
-                      style={{
-                        background: '#dc3545',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        padding: '2px 8px',
-                        fontSize: '12px',
-                      }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
-                      gap: '10px',
-                    }}
-                  >
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        ICD-10 Code
-                      </label>
-                      <input
-                        type="text"
-                        value={diagnosis.icd10_code}
-                        onChange={(e) =>
-                          handleDiagnosisChange(
-                            index,
-                            'icd10_code',
-                            e.target.value
-                          )
-                        }
-                        placeholder="e.g., B20"
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        Type
-                      </label>
-                      <select
-                        value={diagnosis.diagnosis_type}
-                        onChange={(e) =>
-                          handleDiagnosisChange(
-                            index,
-                            'diagnosis_type',
-                            e.target.value
-                          )
-                        }
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      >
-                        {validDiagnosisTypes.map((type) => (
-                          <option key={type} value={type}>
-                            {type.charAt(0).toUpperCase() +
-                              type.slice(1).replace('_', ' ')}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div style={{ gridColumn: 'span 2' }}>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        Description
-                      </label>
-                      <textarea
-                        value={diagnosis.diagnosis_description}
-                        onChange={(e) =>
-                          handleDiagnosisChange(
-                            index,
-                            'diagnosis_description',
-                            e.target.value
-                          )
-                        }
-                        rows="2"
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        Onset Date
-                      </label>
-                      <input
-                        type="date"
-                        value={diagnosis.onset_date}
-                        onChange={(e) =>
-                          handleDiagnosisChange(
-                            index,
-                            'onset_date',
-                            e.target.value
-                          )
-                        }
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        Resolved Date
-                      </label>
-                      <input
-                        type="date"
-                        value={diagnosis.resolved_date}
-                        onChange={(e) =>
-                          handleDiagnosisChange(
-                            index,
-                            'resolved_date',
-                            e.target.value
-                          )
-                        }
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
-                    <div style={{ gridColumn: 'span 2' }}>
-                      <label
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={diagnosis.is_chronic}
-                          onChange={(e) =>
-                            handleDiagnosisChange(
-                              index,
-                              'is_chronic',
-                              e.target.checked
-                            )
-                          }
-                          style={{ width: '16px', height: '16px' }}
-                        />
-                        Chronic Condition
-                      </label>
-                    </div>
-                  </div>
+                  <p style={{ margin: 0, color: '#004085', fontSize: '14px' }}>
+                    You can add diagnoses and procedures after saving the visit.
+                  </p>
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
 
-            <div style={{ marginBottom: '15px' }}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '10px',
-                }}
-              >
-                <label
-                  style={{
-                    display: 'block',
-                    fontWeight: 'bold',
-                  }}
-                >
-                  Procedures
-                </label>
-                <button
-                  type="button"
-                  onClick={handleAddProcedure}
-                  style={{
-                    padding: '5px 10px',
-                    background: '#6f42c1',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                  }}
-                >
-                  Add Procedure
-                </button>
-              </div>
-              {formData.procedures.map((procedure, index) => (
-                <div
-                  key={index}
-                  style={{
-                    border: '1px solid #e9ecef',
-                    borderRadius: '4px',
-                    padding: '10px',
-                    marginBottom: '10px',
-                  }}
-                >
+            {mode === 'edit' && (
+              <>
+                <div style={{ marginBottom: '15px' }}>
                   <div
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
+                      alignItems: 'center',
                       marginBottom: '10px',
                     }}
                   >
-                    <h4 style={{ margin: 0 }}>Procedure {index + 1}</h4>
+                    <label
+                      style={{
+                        display: 'block',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      Diagnoses
+                    </label>
                     <button
                       type="button"
-                      onClick={() => handleRemoveProcedure(index)}
+                      onClick={handleAddDiagnosis}
                       style={{
-                        background: '#dc3545',
+                        padding: '5px 10px',
+                        background: '#17a2b8',
                         color: 'white',
                         border: 'none',
                         borderRadius: '4px',
                         cursor: 'pointer',
-                        padding: '2px 8px',
                         fontSize: '12px',
                       }}
                     >
-                      Remove
+                      Add Diagnosis
                     </button>
                   </div>
+                  {formData.diagnoses.length === 0 ? (
+                    <div
+                      style={{
+                        padding: '10px',
+                        border: '1px solid #e9ecef',
+                        borderRadius: '4px',
+                        backgroundColor: '#f8f9fa',
+                        color: '#6c757d',
+                        textAlign: 'center',
+                      }}
+                    >
+                      No diagnoses recorded
+                    </div>
+                  ) : (
+                    formData.diagnoses.map((diagnosis, index) => (
+                      <div
+                        key={index}
+                        style={{
+                          border: '1px solid #e9ecef',
+                          borderRadius: '4px',
+                          padding: '10px',
+                          marginBottom: '10px',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            marginBottom: '10px',
+                          }}
+                        >
+                          <h4 style={{ margin: 0 }}>Diagnosis {index + 1}</h4>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveDiagnosis(index)}
+                            style={{
+                              background: '#dc3545',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              padding: '2px 8px',
+                              fontSize: '12px',
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 1fr',
+                            gap: '10px',
+                          }}
+                        >
+                          <div>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              ICD-10 Code
+                            </label>
+                            <input
+                              type="text"
+                              value={diagnosis.icd10_code}
+                              onChange={(e) =>
+                                handleDiagnosisChange(
+                                  index,
+                                  'icd10_code',
+                                  e.target.value
+                                )
+                              }
+                              placeholder="e.g., B20"
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              Type
+                            </label>
+                            <select
+                              value={diagnosis.diagnosis_type}
+                              onChange={(e) =>
+                                handleDiagnosisChange(
+                                  index,
+                                  'diagnosis_type',
+                                  e.target.value
+                                )
+                              }
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            >
+                              {validDiagnosisTypes.map((type) => (
+                                <option key={type} value={type}>
+                                  {type.charAt(0).toUpperCase() +
+                                    type.slice(1).replace('_', ' ')}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div style={{ gridColumn: 'span 2' }}>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              Description
+                            </label>
+                            <textarea
+                              value={diagnosis.diagnosis_description}
+                              onChange={(e) =>
+                                handleDiagnosisChange(
+                                  index,
+                                  'diagnosis_description',
+                                  e.target.value
+                                )
+                              }
+                              rows="2"
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              Onset Date
+                            </label>
+                            <input
+                              type="date"
+                              value={diagnosis.onset_date}
+                              onChange={(e) =>
+                                handleDiagnosisChange(
+                                  index,
+                                  'onset_date',
+                                  e.target.value
+                                )
+                              }
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              Resolved Date
+                            </label>
+                            <input
+                              type="date"
+                              value={diagnosis.resolved_date}
+                              onChange={(e) =>
+                                handleDiagnosisChange(
+                                  index,
+                                  'resolved_date',
+                                  e.target.value
+                                )
+                              }
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                          <div style={{ gridColumn: 'span 2' }}>
+                            <label
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={diagnosis.is_chronic}
+                                onChange={(e) =>
+                                  handleDiagnosisChange(
+                                    index,
+                                    'is_chronic',
+                                    e.target.checked
+                                  )
+                                }
+                                style={{ width: '16px', height: '16px' }}
+                              />
+                              Chronic Condition
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div style={{ marginBottom: '15px' }}>
                   <div
                     style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
-                      gap: '10px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '10px',
                     }}
                   >
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        CPT Code
-                      </label>
-                      <input
-                        type="text"
-                        value={procedure.cpt_code}
-                        onChange={(e) =>
-                          handleProcedureChange(
-                            index,
-                            'cpt_code',
-                            e.target.value
-                          )
-                        }
-                        placeholder="e.g., 99213"
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        Performed At
-                      </label>
-                      <input
-                        type="datetime-local"
-                        value={procedure.performed_at}
-                        onChange={(e) =>
-                          handleProcedureChange(
-                            index,
-                            'performed_at',
-                            e.target.value
-                          )
-                        }
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
-                    <div style={{ gridColumn: 'span 2' }}>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        Procedure Name
-                      </label>
-                      <input
-                        type="text"
-                        value={procedure.procedure_name}
-                        onChange={(e) =>
-                          handleProcedureChange(
-                            index,
-                            'procedure_name',
-                            e.target.value
-                          )
-                        }
-                        placeholder="e.g., Physical Examination"
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
-                    <div style={{ gridColumn: 'span 2' }}>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        Description
-                      </label>
-                      <textarea
-                        value={procedure.procedure_description}
-                        onChange={(e) =>
-                          handleProcedureChange(
-                            index,
-                            'procedure_description',
-                            e.target.value
-                          )
-                        }
-                        rows="2"
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
-                    <div style={{ gridColumn: 'span 2' }}>
-                      <label style={{ fontSize: '12px', color: '#6c757d' }}>
-                        Outcome
-                      </label>
-                      <textarea
-                        value={procedure.outcome}
-                        onChange={(e) =>
-                          handleProcedureChange(
-                            index,
-                            'outcome',
-                            e.target.value
-                          )
-                        }
-                        rows="2"
-                        style={{
-                          width: '100%',
-                          padding: '6px',
-                          border: '1px solid #ced4da',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                        }}
-                      />
-                    </div>
+                    <label
+                      style={{
+                        display: 'block',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      Procedures
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleAddProcedure}
+                      style={{
+                        padding: '5px 10px',
+                        background: '#6f42c1',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                      }}
+                    >
+                      Add Procedure
+                    </button>
                   </div>
+                  {formData.procedures.length === 0 ? (
+                    <div
+                      style={{
+                        padding: '10px',
+                        border: '1px solid #e9ecef',
+                        borderRadius: '4px',
+                        backgroundColor: '#f8f9fa',
+                        color: '#6c757d',
+                        textAlign: 'center',
+                      }}
+                    >
+                      No procedures recorded
+                    </div>
+                  ) : (
+                    formData.procedures.map((procedure, index) => (
+                      <div
+                        key={index}
+                        style={{
+                          border: '1px solid #e9ecef',
+                          borderRadius: '4px',
+                          padding: '10px',
+                          marginBottom: '10px',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            marginBottom: '10px',
+                          }}
+                        >
+                          <h4 style={{ margin: 0 }}>Procedure {index + 1}</h4>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveProcedure(index)}
+                            style={{
+                              background: '#dc3545',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              padding: '2px 8px',
+                              fontSize: '12px',
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 1fr',
+                            gap: '10px',
+                          }}
+                        >
+                          <div>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              CPT Code
+                            </label>
+                            <input
+                              type="text"
+                              value={procedure.cpt_code}
+                              onChange={(e) =>
+                                handleProcedureChange(
+                                  index,
+                                  'cpt_code',
+                                  e.target.value
+                                )
+                              }
+                              placeholder="e.g., 99213"
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              Performed At
+                            </label>
+                            <input
+                              type="datetime-local"
+                              value={procedure.performed_at}
+                              onChange={(e) =>
+                                handleProcedureChange(
+                                  index,
+                                  'performed_at',
+                                  e.target.value
+                                )
+                              }
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                          <div style={{ gridColumn: 'span 2' }}>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              Procedure Name
+                            </label>
+                            <input
+                              type="text"
+                              value={procedure.procedure_name}
+                              onChange={(e) =>
+                                handleProcedureChange(
+                                  index,
+                                  'procedure_name',
+                                  e.target.value
+                                )
+                              }
+                              placeholder="e.g., Physical Examination"
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                          <div style={{ gridColumn: 'span 2' }}>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              Description
+                            </label>
+                            <textarea
+                              value={procedure.procedure_description}
+                              onChange={(e) =>
+                                handleProcedureChange(
+                                  index,
+                                  'procedure_description',
+                                  e.target.value
+                                )
+                              }
+                              rows="2"
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                          <div style={{ gridColumn: 'span 2' }}>
+                            <label style={{ fontSize: '12px', color: '#6c757d' }}>
+                              Outcome
+                            </label>
+                            <textarea
+                              value={procedure.outcome}
+                              onChange={(e) =>
+                                handleProcedureChange(
+                                  index,
+                                  'outcome',
+                                  e.target.value
+                                )
+                              }
+                              rows="2"
+                              style={{
+                                width: '100%',
+                                padding: '6px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                fontSize: '14px',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ))}
-            </div>
+              </>
+            )}
 
             <div
               style={{
@@ -2388,6 +2465,738 @@ const ClinicalVisitModal = ({
             </div>
           </form>
         )}
+      </div>
+    </div>
+  );
+};
+
+// Visit Details View Component
+const VisitDetailsView = ({
+  visit,
+  getPatientName,
+  getFacilityName,
+  formatDate,
+  onClose,
+  onSaveDiagnosis,
+  onSaveProcedure,
+  validDiagnosisTypes,
+}) => {
+  const [showDiagnosisForm, setShowDiagnosisForm] = useState(false);
+  const [showProcedureForm, setShowProcedureForm] = useState(false);
+  const [diagnosisForm, setDiagnosisForm] = useState({
+    icd10_code: '',
+    diagnosis_description: '',
+    diagnosis_type: 'primary',
+    is_chronic: false,
+    onset_date: '',
+    resolved_date: '',
+  });
+  const [procedureForm, setProcedureForm] = useState({
+    cpt_code: '',
+    procedure_name: '',
+    procedure_description: '',
+    outcome: '',
+    performed_at: new Date().toISOString().slice(0, 16),
+  });
+
+  const handleDiagnosisChange = (field, value) => {
+    setDiagnosisForm({ ...diagnosisForm, [field]: value });
+  };
+
+  const handleProcedureChange = (field, value) => {
+    setProcedureForm({ ...procedureForm, [field]: value });
+  };
+
+  const handleSaveDiagnosisClick = () => {
+    if (!diagnosisForm.diagnosis_description) {
+      return;
+    }
+    onSaveDiagnosis(visit.visit_id, diagnosisForm);
+    setDiagnosisForm({
+      icd10_code: '',
+      diagnosis_description: '',
+      diagnosis_type: 'primary',
+      is_chronic: false,
+      onset_date: '',
+      resolved_date: '',
+    });
+    setShowDiagnosisForm(false);
+  };
+
+  const handleSaveProcedureClick = () => {
+    if (!procedureForm.procedure_name) {
+      return;
+    }
+    onSaveProcedure(visit.visit_id, procedureForm);
+    setProcedureForm({
+      cpt_code: '',
+      procedure_name: '',
+      procedure_description: '',
+      outcome: '',
+      performed_at: new Date().toISOString().slice(0, 16),
+    });
+    setShowProcedureForm(false);
+  };
+
+  if (!visit) {
+    return (
+      <p style={{ color: '#6c757d', textAlign: 'center', padding: '20px' }}>
+        Loading visit details...
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: '15px' }}>
+        <label
+          style={{
+            display: 'block',
+            marginBottom: '5px',
+            fontWeight: 'bold',
+            color: '#6c757d',
+          }}
+        >
+          Patient Name
+        </label>
+        <input
+          type="text"
+          value={visit.patientName || getPatientName(visit.patient_id)}
+          readOnly
+          style={{
+            width: '100%',
+            padding: '8px',
+            border: '1px solid #ced4da',
+            borderRadius: '4px',
+            backgroundColor: '#fff',
+          }}
+        />
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '15px',
+          marginBottom: '15px',
+        }}
+      >
+        <div>
+          <label
+            style={{
+              display: 'block',
+              marginBottom: '5px',
+              fontWeight: 'bold',
+              color: '#6c757d',
+            }}
+          >
+            Visit Date
+          </label>
+          <input
+            type="text"
+            value={formatDate(visit.visit_date)}
+            readOnly
+            style={{
+              width: '100%',
+              padding: '8px',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              backgroundColor: '#fff',
+            }}
+          />
+        </div>
+        <div>
+          <label
+            style={{
+              display: 'block',
+              marginBottom: '5px',
+              fontWeight: 'bold',
+              color: '#6c757d',
+            }}
+          >
+            Visit Type
+          </label>
+          <input
+            type="text"
+            value={visit.visit_type}
+            readOnly
+            style={{
+              width: '100%',
+              padding: '8px',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              backgroundColor: '#fff',
+            }}
+          />
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '15px',
+          marginBottom: '15px',
+        }}
+      >
+        <div>
+          <label
+            style={{
+              display: 'block',
+              marginBottom: '5px',
+              fontWeight: 'bold',
+              color: '#6c757d',
+            }}
+          >
+            MyHubCares Branch
+          </label>
+          <input
+            type="text"
+            value={visit.facilityName || getFacilityName(visit.facility_id)}
+            readOnly
+            style={{
+              width: '100%',
+              padding: '8px',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              backgroundColor: '#fff',
+            }}
+          />
+        </div>
+        <div>
+          <label
+            style={{
+              display: 'block',
+              marginBottom: '5px',
+              fontWeight: 'bold',
+              color: '#6c757d',
+            }}
+          >
+            Physician <span style={{ color: 'red' }}>*</span>
+          </label>
+          <input
+            type="text"
+            value={visit.providerName || 'Unknown Provider'}
+            readOnly
+            style={{
+              width: '100%',
+              padding: '8px',
+              border: '1px solid #ced4da',
+              borderRadius: '4px',
+              backgroundColor: '#fff',
+            }}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: '15px' }}>
+        <label
+          style={{
+            display: 'block',
+            marginBottom: '5px',
+            fontWeight: 'bold',
+            color: '#6c757d',
+          }}
+        >
+          WHO Stage
+        </label>
+        <input
+          type="text"
+          value={visit.who_stage}
+          readOnly
+          style={{
+            width: '100%',
+            padding: '8px',
+            border: '1px solid #ced4da',
+            borderRadius: '4px',
+            backgroundColor: '#fff',
+          }}
+        />
+      </div>
+
+      <div style={{ marginBottom: '15px' }}>
+        <label
+          style={{
+            display: 'block',
+            marginBottom: '5px',
+            fontWeight: 'bold',
+            color: '#6c757d',
+          }}
+        >
+          Clinical Notes
+        </label>
+        <textarea
+          value={visit.clinical_notes || 'No notes'}
+          readOnly
+          rows="4"
+          style={{
+            width: '100%',
+            padding: '8px',
+            border: '1px solid #ced4da',
+            borderRadius: '4px',
+            backgroundColor: '#fff',
+            resize: 'vertical',
+          }}
+        />
+      </div>
+
+      {/* Diagnoses Section */}
+      <div style={{ marginBottom: '15px' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '10px',
+          }}
+        >
+          <h3
+            style={{
+              margin: 0,
+              fontWeight: 'bold',
+              color: '#333',
+              fontSize: '16px',
+            }}
+          >
+            Diagnoses
+          </h3>
+          <button
+            type="button"
+            onClick={() => setShowDiagnosisForm(!showDiagnosisForm)}
+            style={{
+              padding: '5px 10px',
+              background: '#17a2b8',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+            }}
+          >
+            {showDiagnosisForm ? 'Cancel' : 'Add Diagnosis'}
+          </button>
+        </div>
+
+        {showDiagnosisForm && (
+          <div
+            style={{
+              border: '1px solid #e9ecef',
+              borderRadius: '4px',
+              padding: '15px',
+              marginBottom: '10px',
+              backgroundColor: '#f8f9fa',
+            }}
+          >
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                ICD-10 Code
+              </label>
+              <input
+                type="text"
+                value={diagnosisForm.icd10_code}
+                onChange={(e) => handleDiagnosisChange('icd10_code', e.target.value)}
+                placeholder="e.g., B20"
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                Type
+              </label>
+              <select
+                value={diagnosisForm.diagnosis_type}
+                onChange={(e) => handleDiagnosisChange('diagnosis_type', e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              >
+                {validDiagnosisTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ')}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                Description <span style={{ color: 'red' }}>*</span>
+              </label>
+              <textarea
+                value={diagnosisForm.diagnosis_description}
+                onChange={(e) => handleDiagnosisChange('diagnosis_description', e.target.value)}
+                rows="2"
+                required
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                Onset Date
+              </label>
+              <input
+                type="date"
+                value={diagnosisForm.onset_date}
+                onChange={(e) => handleDiagnosisChange('onset_date', e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                Resolved Date
+              </label>
+              <input
+                type="date"
+                value={diagnosisForm.resolved_date}
+                onChange={(e) => handleDiagnosisChange('resolved_date', e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  checked={diagnosisForm.is_chronic}
+                  onChange={(e) => handleDiagnosisChange('is_chronic', e.target.checked)}
+                  style={{ width: '16px', height: '16px' }}
+                />
+                Chronic Condition
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDiagnosisForm(false);
+                  setDiagnosisForm({
+                    icd10_code: '',
+                    diagnosis_description: '',
+                    diagnosis_type: 'primary',
+                    is_chronic: false,
+                    onset_date: '',
+                    resolved_date: '',
+                  });
+                }}
+                style={{
+                  padding: '6px 12px',
+                  background: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveDiagnosisClick}
+                style={{
+                  padding: '6px 12px',
+                  background: '#17a2b8',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+              >
+                Save Diagnosis
+              </button>
+            </div>
+          </div>
+        )}
+
+        {visit.diagnoses && visit.diagnoses.length > 0 ? (
+          <div
+            style={{
+              padding: '10px',
+              border: '1px solid #e9ecef',
+              borderRadius: '4px',
+              backgroundColor: '#f8f9fa',
+            }}
+          >
+            {visit.diagnoses.map((d, i) => (
+              <div key={i} style={{ marginBottom: '5px' }}>
+                {d.diagnosis_description}
+                {d.icd10_code && <span> (ICD-10: {d.icd10_code})</span>}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div
+            style={{
+              padding: '10px',
+              border: '1px solid #e9ecef',
+              borderRadius: '4px',
+              backgroundColor: '#f8f9fa',
+              color: '#6c757d',
+            }}
+          >
+            No diagnoses recorded
+          </div>
+        )}
+      </div>
+
+      {/* Procedures Section */}
+      <div style={{ marginBottom: '15px' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '10px',
+          }}
+        >
+          <h3
+            style={{
+              margin: 0,
+              fontWeight: 'bold',
+              color: '#333',
+              fontSize: '16px',
+            }}
+          >
+            Procedures
+          </h3>
+          <button
+            type="button"
+            onClick={() => setShowProcedureForm(!showProcedureForm)}
+            style={{
+              padding: '5px 10px',
+              background: '#6f42c1',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+            }}
+          >
+            {showProcedureForm ? 'Cancel' : 'Add Procedure'}
+          </button>
+        </div>
+
+        {showProcedureForm && (
+          <div
+            style={{
+              border: '1px solid #e9ecef',
+              borderRadius: '4px',
+              padding: '15px',
+              marginBottom: '10px',
+              backgroundColor: '#f8f9fa',
+            }}
+          >
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                CPT Code
+              </label>
+              <input
+                type="text"
+                value={procedureForm.cpt_code}
+                onChange={(e) => handleProcedureChange('cpt_code', e.target.value)}
+                placeholder="e.g., 99213"
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                Procedure Name <span style={{ color: 'red' }}>*</span>
+              </label>
+              <input
+                type="text"
+                value={procedureForm.procedure_name}
+                onChange={(e) => handleProcedureChange('procedure_name', e.target.value)}
+                placeholder="e.g., Physical Examination"
+                required
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                Description
+              </label>
+              <textarea
+                value={procedureForm.procedure_description}
+                onChange={(e) => handleProcedureChange('procedure_description', e.target.value)}
+                rows="2"
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                Performed At
+              </label>
+              <input
+                type="datetime-local"
+                value={procedureForm.performed_at}
+                onChange={(e) => handleProcedureChange('performed_at', e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '12px', color: '#6c757d', display: 'block', marginBottom: '5px' }}>
+                Outcome
+              </label>
+              <textarea
+                value={procedureForm.outcome}
+                onChange={(e) => handleProcedureChange('outcome', e.target.value)}
+                rows="2"
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowProcedureForm(false);
+                  setProcedureForm({
+                    cpt_code: '',
+                    procedure_name: '',
+                    procedure_description: '',
+                    outcome: '',
+                    performed_at: new Date().toISOString().slice(0, 16),
+                  });
+                }}
+                style={{
+                  padding: '6px 12px',
+                  background: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveProcedureClick}
+                style={{
+                  padding: '6px 12px',
+                  background: '#6f42c1',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+              >
+                Save Procedure
+              </button>
+            </div>
+          </div>
+        )}
+
+        {visit.procedures && visit.procedures.length > 0 ? (
+          <div
+            style={{
+              padding: '10px',
+              border: '1px solid #e9ecef',
+              borderRadius: '4px',
+              backgroundColor: '#f8f9fa',
+            }}
+          >
+            {visit.procedures.map((p, i) => (
+              <div key={i} style={{ marginBottom: '5px' }}>
+                {p.procedure_name}
+                {p.cpt_code && <span> (CPT: {p.cpt_code})</span>}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div
+            style={{
+              padding: '10px',
+              border: '1px solid #e9ecef',
+              borderRadius: '4px',
+              backgroundColor: '#f8f9fa',
+              color: '#6c757d',
+            }}
+          >
+            No procedures recorded
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          gap: '10px',
+          marginTop: '20px',
+        }}
+      >
+        <button
+          onClick={onClose}
+          style={{
+            padding: '8px 16px',
+            background: '#6c757d',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+          }}
+        >
+          Close
+        </button>
       </div>
     </div>
   );

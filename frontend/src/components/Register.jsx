@@ -17,6 +17,9 @@ const PatientRegistration = () => {
     sex: '',
     civilStatus: '',
     nationality: 'Filipino',
+    motherName: '',
+    fatherName: '',
+    birthOrder: '',
 
     // Contact Information
     contactPhone: '',
@@ -144,6 +147,11 @@ const PatientRegistration = () => {
       if (!formData.sex) newErrors.sex = 'Sex is required';
       if (!formData.civilStatus)
         newErrors.civilStatus = 'Civil status is required';
+      if (!formData.motherName) newErrors.motherName = 'Mother\'s name is required';
+      if (!formData.fatherName) newErrors.fatherName = 'Father\'s name is required';
+      if (!formData.birthOrder) newErrors.birthOrder = 'Birth order is required';
+      if (formData.birthOrder && (isNaN(formData.birthOrder) || parseInt(formData.birthOrder) < 1))
+        newErrors.birthOrder = 'Birth order must be a number greater than 0';
     } else if (step === 2) {
       if (!formData.contactPhone)
         newErrors.contactPhone = 'Mobile number is required';
@@ -197,10 +205,13 @@ const PatientRegistration = () => {
     setApiError('');
 
     try {
-      const res = await fetch('http://localhost:5000/api/patients/register', {
+      const res = await fetch('http://localhost:5000/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          birthOrder: parseInt(formData.birthOrder) || 1,
+        }),
       });
 
       const data = await res.json();
@@ -463,6 +474,65 @@ const PatientRegistration = () => {
                         value={formData.nationality}
                         onChange={handleInputChange}
                       />
+                    </div>
+
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label className="required">Mother's Name</label>
+                        <input
+                          type="text"
+                          id="motherName"
+                          name="motherName"
+                          value={formData.motherName}
+                          onChange={handleInputChange}
+                          required
+                          placeholder="Enter mother's full name"
+                        />
+                        {errors.motherName && (
+                          <div className="error-message">
+                            {errors.motherName}
+                          </div>
+                        )}
+                      </div>
+                      <div className="form-group">
+                        <label className="required">Father's Name</label>
+                        <input
+                          type="text"
+                          id="fatherName"
+                          name="fatherName"
+                          value={formData.fatherName}
+                          onChange={handleInputChange}
+                          required
+                          placeholder="Enter father's full name"
+                        />
+                        {errors.fatherName && (
+                          <div className="error-message">
+                            {errors.fatherName}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="form-group">
+                      <label className="required">Birth Order</label>
+                      <input
+                        type="number"
+                        id="birthOrder"
+                        name="birthOrder"
+                        value={formData.birthOrder}
+                        onChange={handleInputChange}
+                        required
+                        min="1"
+                        placeholder="e.g., 1, 2, 3..."
+                      />
+                      <small className="text-muted">
+                        Your position among your siblings (1 = firstborn, 2 = second, etc.)
+                      </small>
+                      {errors.birthOrder && (
+                        <div className="error-message">
+                          {errors.birthOrder}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

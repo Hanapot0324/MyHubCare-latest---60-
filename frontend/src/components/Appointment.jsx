@@ -1,61 +1,179 @@
 import React, { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, X, Check, Trash2 } from 'lucide-react';
+import { AccessTime, LocationOn, LocalHospital } from '@mui/icons-material';
 
-const Appointments = () => {
-    const [activeTab, setActiveTab] = useState('calendar');
+const API_BASE_URL = 'http://localhost:5000/api';
+
+const Appointments = ({ socket }) => {
     const [appointments, setAppointments] = useState([]);
     const [filteredAppointments, setFilteredAppointments] = useState([]);
-    const [searchTerm, setSearchTerm] = useState('');
-    const [statusFilter, setStatusFilter] = useState('all');
-    const [showAddModal, setShowAddModal] = useState(false);
-    const [showEditModal, setShowEditModal] = useState(false);
-    const [selectedAppointment, setSelectedAppointment] = useState(null);
     const [currentMonth, setCurrentMonth] = useState(new Date());
     const [selectedDay, setSelectedDay] = useState(null);
     const [toast, setToast] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [showAddModal, setShowAddModal] = useState(false);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [selectedAppointment, setSelectedAppointment] = useState(null);
+    
+    // For form dropdowns
+    const [patients, setPatients] = useState([]);
+    const [facilities, setFacilities] = useState([]);
+    const [providers, setProviders] = useState([]);
+    
+    // Current user info
+    const [currentUser, setCurrentUser] = useState(null);
+    const [currentUserRole, setCurrentUserRole] = useState(null);
+    const [currentPatientId, setCurrentPatientId] = useState(null);
 
-    // Dummy data
-    const dummyAppointments = [
-        {
-            id: 1,
-            patientName: "John Doe",
-            appointmentDate: "2025-11-10",
-            appointmentTime: "10:00",
-            facilityName: "My Hub Cares Ortigas Main",
-            providerName: "Dr. Maria Santos",
-            type: "FOLLOW-UP CONSULTATION",
-            status: "SCHEDULED"
-        },
-        {
-            id: 2,
-            patientName: "Maria Santos",
-            appointmentDate: "2025-11-08",
-            appointmentTime: "14:00",
-            facilityName: "My Hub Cares Ortigas Main",
-            providerName: "Dr. Maria Santos",
-            type: "ART PICKUP",
-            status: "SCHEDULED"
-        },
-        {
-            id: 3,
-            patientName: "Carlos Rodriguez",
-            appointmentDate: "2025-11-05",
-            appointmentTime: "09:00",
-            facilityName: "My Hub Cares Ortigas Main",
-            providerName: "Dr. Maria Santos",
-            type: "INITIAL CONSULTATION",
-            status: "COMPLETED"
-        }
-    ];
+    // Notifications
+    const [notifications, setNotifications] = useState([]);
+
+    // Get auth token
+    const getAuthToken = () => {
+        return localStorage.getItem('token');
+    };
 
     useEffect(() => {
-        setAppointments(dummyAppointments);
-        setFilteredAppointments(dummyAppointments);
+        getCurrentUser();
+        fetchAppointments();
+        fetchPatients();
+        fetchFacilities();
+        fetchProviders();
     }, []);
 
+    // Set up interval to refresh appointments and notifications in real-time
     useEffect(() => {
-        filterAppointments();
-    }, [searchTerm, statusFilter, appointments]);
+        // Initial fetch
+        const refreshData = () => {
+            fetchAppointments();
+            // Optionally fetch notifications if needed
+        };
+
+        // Set interval to refresh every 30 seconds (30000ms)
+        const intervalId = setInterval(refreshData, 30000);
+
+        // Cleanup interval on component unmount
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, []);
+
+    // Join patient room for real-time notifications
+    useEffect(() => {
+        if (socket && currentPatientId) {
+            socket.emit('joinPatientRoom', currentPatientId);
+            console.log('Joined patient room:', currentPatientId);
+        }
+    }, [socket, currentPatientId]);
+
+    // Listen for real-time appointment notifications
+    useEffect(() => {
+        if (!socket) return;
+
+        // Listen for new appointments
+        socket.on('newAppointment', (data) => {
+            console.log('📅 New appointment notification:', data);
+            
+            // Add notification
+            setNotifications(prev => [...prev, {
+                id: Date.now(),
+                type: 'appointment',
+                message: data.message,
+                appointment: data.appointment,
+                timestamp: data.timestamp
+            }]);
+
+            // Show toast notification
+            setToast({
+                message: data.message,
+                type: 'success'
+            });
+
+            // Refresh appointments list
+            fetchAppointments();
+        });
+
+        // Listen for patient-specific appointment notifications
+        socket.on('appointmentNotification', (data) => {
+            console.log('📅 Patient appointment notification:', data);
+            
+            setNotifications(prev => [...prev, {
+                id: Date.now(),
+                type: 'appointment',
+                message: data.message,
+                appointment: data.appointment,
+                timestamp: data.timestamp
+            }]);
+
+            setToast({
+                message: data.message,
+                type: 'success'
+            });
+
+            fetchAppointments();
+        });
+
+        return () => {
+            socket.off('newAppointment');
+            socket.off('appointmentNotification');
+        };
+    }, [socket]);
+
+    // Get current user info
+    const getCurrentUser = async () => {
+        try {
+            const token = getAuthToken();
+            if (!token) return;
+
+            const response = await fetch(`${API_BASE_URL}/auth/me`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.user) {
+                    const user = data.user;
+                    setCurrentUser(user);
+                    setCurrentUserRole(user.role);
+                    
+                    // If user is a patient, get their patient_id
+                    if (user.role === 'patient') {
+                        // Try to get patient_id from nested patient object or direct property
+                        const patientId = user.patient?.patient_id || user.patient_id || null;
+                        
+                        // If not found, try to fetch from profile endpoint
+                        if (!patientId) {
+                            try {
+                                const profileResponse = await fetch(`${API_BASE_URL}/profile/me`, {
+                                    headers: { Authorization: `Bearer ${token}` }
+                                });
+                                if (profileResponse.ok) {
+                                    const profileData = await profileResponse.json();
+                                    if (profileData.success && profileData.patient) {
+                                        setCurrentPatientId(profileData.patient.patient_id);
+                                    }
+                                }
+                            } catch (err) {
+                                console.error('Error fetching patient profile:', err);
+                            }
+                        } else {
+                            setCurrentPatientId(patientId);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error getting current user:', error);
+        }
+    };
+
+    useEffect(() => {
+        if (selectedDay) {
+            filterAppointmentsByDay(selectedDay);
+        } else {
+            setFilteredAppointments([]);
+        }
+    }, [selectedDay, appointments]);
 
     // Auto-hide toast after 3 seconds
     useEffect(() => {
@@ -67,21 +185,163 @@ const Appointments = () => {
         }
     }, [toast]);
 
-    const filterAppointments = () => {
-        let filtered = [...appointments];
+    const fetchAppointments = async () => {
+        try {
+            setLoading(true);
+            const token = getAuthToken();
+            if (!token) {
+                setToast({
+                    message: 'Please login to view appointments',
+                    type: 'error'
+                });
+                return;
+            }
 
-        if (searchTerm) {
-            filtered = filtered.filter(apt => {
-                const patientName = apt.patientName ? apt.patientName.toLowerCase() : '';
-                return patientName.includes(searchTerm.toLowerCase()) ||
-                       apt.type.toLowerCase().includes(searchTerm.toLowerCase());
+            const response = await fetch(`${API_BASE_URL}/appointments`, {
+                headers: {
+                    Authorization: `Bearer ${token}`
+                }
             });
-        }
 
-        if (statusFilter !== 'all') {
-            filtered = filtered.filter(apt => apt.status === statusFilter);
-        }
+            const data = await response.json();
 
+            if (data.success) {
+                setAppointments(data.data || []);
+            } else {
+                throw new Error(data.message || 'Failed to fetch appointments');
+            }
+        } catch (error) {
+            console.error('Error fetching appointments:', error);
+            setToast({
+                message: 'Failed to fetch appointments: ' + error.message,
+                type: 'error'
+            });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const fetchPatients = async () => {
+        try {
+            const token = getAuthToken();
+            if (!token) return;
+
+            const response = await fetch(`${API_BASE_URL}/patients?status=active`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const data = await response.json();
+            let patientsArray = [];
+            
+            if (data.success && data.patients) {
+                patientsArray = data.patients;
+            } else if (Array.isArray(data)) {
+                patientsArray = data;
+            } else if (data && typeof data === 'object') {
+                patientsArray = data.patients || data.data || [];
+            }
+
+            setPatients(patientsArray);
+        } catch (error) {
+            console.error('Error fetching patients:', error);
+        }
+    };
+
+    const fetchFacilities = async () => {
+        try {
+            const token = getAuthToken();
+            if (!token) return;
+
+            const response = await fetch(`${API_BASE_URL}/facilities`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const data = await response.json();
+            let facilitiesArray = [];
+            
+            if (data.success && data.data) {
+                facilitiesArray = data.data;
+            } else if (Array.isArray(data)) {
+                facilitiesArray = data;
+            } else if (data && typeof data === 'object') {
+                facilitiesArray = data.facilities || data.data || [];
+            }
+
+            setFacilities(facilitiesArray);
+        } catch (error) {
+            console.error('Error fetching facilities:', error);
+        }
+    };
+
+    const fetchProviders = async () => {
+        try {
+            const token = getAuthToken();
+            if (!token) return;
+
+            // Try new providers endpoint first
+            let response = await fetch(`${API_BASE_URL}/users/providers`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            // If new endpoint doesn't exist (404) or access denied (403), fallback to old endpoint
+            if (!response.ok && (response.status === 404 || response.status === 403)) {
+                response = await fetch(`${API_BASE_URL}/users`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+            }
+
+            if (!response.ok) {
+                console.error('Failed to fetch providers:', response.status);
+                setProviders([]);
+                return;
+            }
+
+            const data = await response.json();
+            let providersArray = [];
+            
+            // New endpoint returns { success: true, providers: [...] }
+            if (data.success && data.providers) {
+                providersArray = data.providers;
+            } 
+            // Old endpoint returns { success: true, users: [...] }
+            else if (data.success && data.users) {
+                // Only fetch physicians/doctors
+                providersArray = data.users.filter(u => 
+                    u.role?.toLowerCase() === 'physician'
+                );
+            } else if (Array.isArray(data)) {
+                // Only fetch physicians/doctors
+                providersArray = data.filter(u => 
+                    u.role?.toLowerCase() === 'physician'
+                );
+            } else if (data.users && Array.isArray(data.users)) {
+                // Handle case where response has users but no success flag
+                providersArray = data.users.filter(u => 
+                    u.role?.toLowerCase() === 'physician'
+                );
+            }
+
+            console.log('Fetched providers (physicians only):', providersArray.length);
+            setProviders(providersArray);
+        } catch (error) {
+            console.error('Error fetching providers:', error);
+            setProviders([]);
+        }
+    };
+
+    const filterAppointmentsByDay = (day) => {
+        if (!day) {
+            setFilteredAppointments([]);
+            return;
+        }
+        
+        const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const filtered = appointments.filter(apt => {
+            const aptDate = new Date(apt.scheduled_start);
+            const aptDateStr = `${aptDate.getFullYear()}-${String(aptDate.getMonth() + 1).padStart(2, '0')}-${String(aptDate.getDate()).padStart(2, '0')}`;
+            return aptDateStr === dateStr;
+        });
+        
         setFilteredAppointments(filtered);
     };
 
@@ -104,6 +364,7 @@ const Appointments = () => {
             }
             return newMonth;
         });
+        setSelectedDay(null);
     };
 
     const handleDayClick = (day) => {
@@ -114,7 +375,11 @@ const Appointments = () => {
         if (!day) return [];
         
         const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        return appointments.filter(apt => apt.appointmentDate === dateStr);
+        return appointments.filter(apt => {
+            const aptDate = new Date(apt.scheduled_start);
+            const aptDateStr = `${aptDate.getFullYear()}-${String(aptDate.getMonth() + 1).padStart(2, '0')}-${String(aptDate.getDate()).padStart(2, '0')}`;
+            return aptDateStr === dateStr;
+        });
     };
 
     const handleEditAppointment = (appointment) => {
@@ -122,42 +387,205 @@ const Appointments = () => {
         setShowEditModal(true);
     };
 
-    const handleDeleteAppointment = (appointmentId) => {
-        if (window.confirm('Are you sure you want to delete this appointment?')) {
-            const updatedAppointments = appointments.filter(apt => apt.id !== appointmentId);
-            setAppointments(updatedAppointments);
+    const handleDeleteAppointment = async (appointmentId) => {
+        if (window.confirm('Are you sure you want to cancel this appointment?')) {
+            try {
+                const token = getAuthToken();
+                const response = await fetch(`${API_BASE_URL}/appointments/${appointmentId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        cancellation_reason: 'Cancelled by user'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    await fetchAppointments();
+                    setToast({
+                        message: 'Appointment cancelled successfully',
+                        type: 'success'
+                    });
+                } else {
+                    throw new Error(data.message || 'Failed to cancel appointment');
+                }
+            } catch (error) {
+                console.error('Error cancelling appointment:', error);
+                setToast({
+                    message: 'Failed to cancel appointment: ' + error.message,
+                    type: 'error'
+                });
+            }
+        }
+    };
+
+    const checkAvailability = async (facility_id, provider_id, scheduled_start, scheduled_end) => {
+        try {
+            const token = getAuthToken();
+            const params = new URLSearchParams({
+                facility_id,
+                scheduled_start,
+                scheduled_end
+            });
+            if (provider_id) {
+                params.append('provider_id', provider_id);
+            }
+
+            const response = await fetch(`${API_BASE_URL}/appointments/availability/check?${params}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const data = await response.json();
+            return data.success && data.data?.available === true;
+        } catch (error) {
+            console.error('Error checking availability:', error);
+            return false;
+        }
+    };
+
+    const handleAddAppointment = async (newAppointment) => {
+        try {
+            const token = getAuthToken();
+            
+            // Convert form data to API format (MySQL DATETIME format: YYYY-MM-DD HH:MM:SS)
+            const scheduledStart = `${newAppointment.appointmentDate} ${newAppointment.appointmentTime}:00`;
+            const scheduledEnd = calculateEndTime(newAppointment.appointmentDate, newAppointment.appointmentTime, newAppointment.duration_minutes || 30);
+
+            // Check availability before creating
+            const isAvailable = await checkAvailability(
+                newAppointment.facility_id,
+                newAppointment.provider_id || null,
+                scheduledStart,
+                scheduledEnd
+            );
+
+            if (!isAvailable) {
+                setToast({
+                    message: 'The selected time slot is not available. Please choose another time.',
+                    type: 'error'
+                });
+                return;
+            }
+
+            const appointmentData = {
+                patient_id: newAppointment.patient_id,
+                provider_id: newAppointment.provider_id || null,
+                facility_id: newAppointment.facility_id,
+                appointment_type: newAppointment.appointment_type,
+                scheduled_start: scheduledStart,
+                scheduled_end: scheduledEnd,
+                duration_minutes: newAppointment.duration_minutes || 30,
+                reason: newAppointment.reason || null,
+                notes: newAppointment.notes || null
+            };
+
+            const response = await fetch(`${API_BASE_URL}/appointments`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(appointmentData)
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                await fetchAppointments();
+                setShowAddModal(false);
+                setToast({
+                    message: 'Appointment booked successfully',
+                    type: 'success'
+                });
+            } else {
+                throw new Error(data.message || 'Failed to create appointment');
+            }
+        } catch (error) {
+            console.error('Error creating appointment:', error);
             setToast({
-                message: 'Appointment deleted successfully',
+                message: 'Failed to book appointment: ' + error.message,
                 type: 'error'
             });
         }
     };
 
-    const handleAddAppointment = (newAppointment) => {
-        const appointment = {
-            id: appointments.length > 0 ? Math.max(...appointments.map(a => a.id)) + 1 : 1,
-            ...newAppointment,
-            status: 'SCHEDULED'
-        };
-        setAppointments([...appointments, appointment]);
-        setShowAddModal(false);
-        setToast({
-            message: 'Appointment booked successfully',
-            type: 'success'
-        });
+    const handleUpdateAppointment = async (updatedAppointment) => {
+        try {
+            const token = getAuthToken();
+            
+            // Convert form data to API format (MySQL DATETIME format: YYYY-MM-DD HH:MM:SS)
+            const scheduledStart = `${updatedAppointment.appointmentDate} ${updatedAppointment.appointmentTime}:00`;
+            const appointmentData = {
+                provider_id: updatedAppointment.provider_id || null,
+                facility_id: updatedAppointment.facility_id,
+                appointment_type: updatedAppointment.appointment_type,
+                scheduled_start: scheduledStart,
+                scheduled_end: calculateEndTime(updatedAppointment.appointmentDate, updatedAppointment.appointmentTime, updatedAppointment.duration_minutes || 30),
+                duration_minutes: updatedAppointment.duration_minutes || 30,
+                reason: updatedAppointment.reason || null,
+                notes: updatedAppointment.notes || null
+            };
+
+            const response = await fetch(`${API_BASE_URL}/appointments/${selectedAppointment.appointment_id}`, {
+                method: 'PUT',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(appointmentData)
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                await fetchAppointments();
+                setShowEditModal(false);
+                setSelectedAppointment(null);
+                setToast({
+                    message: 'Appointment updated successfully',
+                    type: 'success'
+                });
+            } else {
+                throw new Error(data.message || 'Failed to update appointment');
+            }
+        } catch (error) {
+            console.error('Error updating appointment:', error);
+            setToast({
+                message: 'Failed to update appointment: ' + error.message,
+                type: 'error'
+            });
+        }
     };
 
-    const handleUpdateAppointment = (updatedAppointment) => {
-        const updatedAppointments = appointments.map(apt => 
-            apt.id === selectedAppointment.id ? { ...apt, ...updatedAppointment } : apt
-        );
-        setAppointments(updatedAppointments);
-        setShowEditModal(false);
-        setSelectedAppointment(null);
-        setToast({
-            message: 'Appointment updated successfully',
-            type: 'success'
-        });
+    const calculateEndTime = (date, startTime, durationMinutes) => {
+        // Parse date and time components
+        const [year, month, day] = date.split('-').map(Number);
+        const [hours, minutes] = startTime.split(':').map(Number);
+        
+        // Create date in local timezone
+        const start = new Date(year, month - 1, day, hours, minutes, 0);
+        const end = new Date(start.getTime() + durationMinutes * 60000);
+        
+        // Format as MySQL DATETIME: YYYY-MM-DD HH:MM:SS
+        const endYear = end.getFullYear();
+        const endMonth = String(end.getMonth() + 1).padStart(2, '0');
+        const endDay = String(end.getDate()).padStart(2, '0');
+        const endHours = String(end.getHours()).padStart(2, '0');
+        const endMins = String(end.getMinutes()).padStart(2, '0');
+        const endSecs = String(end.getSeconds()).padStart(2, '0');
+        
+        return `${endYear}-${endMonth}-${endDay} ${endHours}:${endMins}:${endSecs}`;
+    };
+
+    const formatAppointmentType = (type) => {
+        return type
+            .split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
     };
 
     const renderCalendar = () => {
@@ -239,7 +667,7 @@ const Appointments = () => {
                         }}>
                             {dayAppointments.length > 1 ? 
                                 `${dayAppointments.length} appointments` : 
-                                dayAppointments[0].type
+                                formatAppointmentType(dayAppointments[0].appointment_type)
                             }
                         </div>
                     )}
@@ -251,7 +679,7 @@ const Appointments = () => {
                             width: '8px',
                             height: '8px',
                             borderRadius: '50%',
-                            backgroundColor: dayAppointments.some(a => a.status === 'SCHEDULED') ? '#28a745' : '#dc3545'
+                            backgroundColor: dayAppointments.some(a => a.status === 'scheduled' || a.status === 'confirmed') ? '#28a745' : '#dc3545'
                         }}></div>
                     )}
                 </div>
@@ -263,43 +691,85 @@ const Appointments = () => {
 
     const renderAppointmentList = (appointmentsList) => {
         if (appointmentsList.length === 0) {
-            return <p style={{ color: '#6c757d', textAlign: 'center', padding: '20px' }}>No appointments found</p>;
+            return (
+                <div style={{ 
+                    textAlign: 'center', 
+                    padding: '40px 20px',
+                    color: '#6c757d'
+                }}>
+                    <p>No appointments scheduled for this day</p>
+                </div>
+            );
         }
 
         return appointmentsList.map(apt => {
-            const date = new Date(apt.appointmentDate);
+            const startDate = new Date(apt.scheduled_start);
+            const endDate = new Date(apt.scheduled_end);
+            
+            // Check if current user can edit this appointment (for full editing)
+            const canEdit = (currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin') &&
+                           (apt.status === 'scheduled' || apt.status === 'confirmed' || 
+                            apt.status === 'pending_provider_confirmation' || apt.status === 'pending_patient_confirmation');
+            
+            // Check if user can edit provider (always true for authorized users)
+            const canEditProvider = currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin';
+            
+            // All appointments are clickable (for viewing/editing)
+            const isClickable = true;
 
             return (
-                <div key={apt.id} style={{
-                    background: 'white',
-                    padding: '20px',
-                    borderRadius: '8px',
-                    marginBottom: '15px',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    transition: 'transform 0.2s ease'
-                }}
-                onMouseEnter={(e) => {
-                    e.target.style.transform = 'translateY(-2px)';
-                    e.target.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
-                }}
-                onMouseLeave={(e) => {
-                    e.target.style.transform = 'translateY(0)';
-                    e.target.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
-                }}>
+                <div 
+                    key={apt.appointment_id} 
+                    style={{
+                        background: 'white',
+                        padding: '20px',
+                        borderRadius: '8px',
+                        marginBottom: '15px',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                        transition: 'transform 0.2s ease',
+                        cursor: isClickable ? 'pointer' : 'default'
+                    }}
+                    onClick={() => {
+                        if (canEdit) {
+                            handleEditAppointment(apt);
+                        } else if (isClickable) {
+                            // Even if can't edit, allow viewing by opening edit modal in view mode
+                            // or we can create a view-only modal, but for now let's allow edit modal
+                            handleEditAppointment(apt);
+                        }
+                    }}
+                    onMouseEnter={(e) => {
+                        if (isClickable) {
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
+                            if (canEdit) {
+                                e.currentTarget.style.border = '1px solid #007bff';
+                            } else {
+                                e.currentTarget.style.border = '1px solid #6c757d';
+                            }
+                        }
+                    }}
+                    onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                        e.currentTarget.style.border = 'none';
+                    }}
+                >
                     <div>
                         <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>
-                            {apt.patientName || 'N/A'}
+                            {apt.patient_name || 'N/A'}
                         </h3>
                         <strong style={{ color: '#007bff' }}>
-                            {date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                            {startDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                         </strong>
                         <div style={{ marginTop: '8px', color: '#6c757d' }}>
-                            <span style={{ marginRight: '15px' }}>🕐 {apt.appointmentTime}</span>
-                            <span style={{ marginRight: '15px' }}>📍 {apt.facilityName || 'N/A'}</span>
-                            <span>👨‍⚕️ {apt.providerName || 'N/A'}</span>
+                            <span style={{ marginRight: '15px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <AccessTime fontSize="small" /> {startDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - {endDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            <span style={{ marginRight: '15px', display: 'flex', alignItems: 'center', gap: '4px' }}><LocationOn fontSize="small" /> {apt.facility_name || 'N/A'}</span>
+                            {apt.provider_name && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><LocalHospital fontSize="small" /> {apt.provider_name}</span>
+                            )}
                         </div>
                         <div style={{ marginTop: '10px' }}>
                             <span style={{
@@ -310,58 +780,70 @@ const Appointments = () => {
                                 fontSize: '12px',
                                 marginRight: '8px'
                             }}>
-                                {apt.type}
+                                {formatAppointmentType(apt.appointment_type)}
                             </span>
                             <span style={{
                                 padding: '4px 8px',
                                 borderRadius: '4px',
-                                background: apt.status === 'SCHEDULED' ? '#007bff' : 
-                                          apt.status === 'COMPLETED' ? '#28a745' : 
-                                          apt.status === 'CANCELLED' ? '#dc3545' : '#6c757d',
+                                background: apt.status === 'scheduled' || apt.status === 'confirmed' ? '#007bff' : 
+                                          apt.status === 'completed' ? '#28a745' : 
+                                          apt.status === 'cancelled' ? '#dc3545' : '#6c757d',
                                 color: 'white',
                                 fontSize: '12px'
                             }}>
-                                {apt.status}
+                                {apt.status.toUpperCase()}
                             </span>
                         </div>
+                        {apt.notes && (
+                            <div style={{ marginTop: '10px', color: '#6c757d', fontSize: '14px' }}>
+                                <strong>Notes:</strong> {apt.notes}
+                            </div>
+                        )}
                     </div>
-                    <div>
-                        {apt.status === 'SCHEDULED' && (
-                            <>
-                                <button 
-                                    onClick={() => handleEditAppointment(apt)}
-                                    style={{
-                                        padding: '8px 16px',
-                                        marginRight: '8px',
-                                        background: '#007bff',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: 'pointer',
-                                        transition: 'background 0.2s ease'
-                                    }}
-                                    onMouseEnter={(e) => e.target.style.background = '#0056b3'}
-                                    onMouseLeave={(e) => e.target.style.background = '#007bff'}
-                                >
-                                    Edit
-                                </button>
-                                <button 
-                                    onClick={() => handleDeleteAppointment(apt.id)}
-                                    style={{
-                                        padding: '8px 16px',
-                                        background: '#dc3545',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: 'pointer',
-                                        transition: 'background 0.2s ease'
-                                    }}
-                                    onMouseEnter={(e) => e.target.style.background = '#c82333'}
-                                    onMouseLeave={(e) => e.target.style.background = '#dc3545'}
-                                >
-                                    Delete
-                                </button>
-                            </>
+                    <div style={{ marginTop: '15px' }}>
+                        {/* Show Edit button for authorized users, Cancel button only if canEdit */}
+                        {canEditProvider && (
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation(); // Prevent triggering the parent's onClick
+                                    handleEditAppointment(apt);
+                                }}
+                                style={{
+                                    padding: '8px 16px',
+                                    marginRight: '8px',
+                                    background: '#007bff',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    transition: 'background 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => e.target.style.background = '#0056b3'}
+                                onMouseLeave={(e) => e.target.style.background = '#007bff'}
+                            >
+                                Edit
+                            </button>
+                        )}
+                        {canEdit && (
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation(); // Prevent triggering the parent's onClick
+                                    handleDeleteAppointment(apt.appointment_id);
+                                }}
+                                style={{
+                                    padding: '8px 16px',
+                                    background: '#dc3545',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    transition: 'background 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => e.target.style.background = '#c82333'}
+                                onMouseLeave={(e) => e.target.style.background = '#dc3545'}
+                            >
+                                Cancel
+                            </button>
                         )}
                     </div>
                 </div>
@@ -377,48 +859,26 @@ const Appointments = () => {
                 <p style={{ margin: '5px 0 0 0', color: '#6c757d' }}>Manage and view your appointments</p>
             </div>
 
-            {/* Tabs */}
-            <div style={{ display: 'flex', borderBottom: '2px solid #dee2e6', marginBottom: '20px' }}>
-                <button
-                    onClick={() => setActiveTab('calendar')}
-                    style={{
-                        padding: '12px 24px',
-                        cursor: 'pointer',
-                        borderBottom: activeTab === 'calendar' ? '3px solid #007bff' : 'none',
-                        fontWeight: activeTab === 'calendar' ? 'bold' : 'normal',
-                        color: activeTab === 'calendar' ? '#007bff' : '#6c757d',
-                        background: 'none',
-                        border: 'none',
-                        borderTopLeftRadius: '4px',
-                        borderTopRightRadius: '4px',
-                        transition: 'all 0.2s ease'
-                    }}
-                >
-                    Calendar View
-                </button>
-                <button
-                    onClick={() => setActiveTab('list')}
-                    style={{
-                        padding: '12px 24px',
-                        cursor: 'pointer',
-                        borderBottom: activeTab === 'list' ? '3px solid #007bff' : 'none',
-                        fontWeight: activeTab === 'list' ? 'bold' : 'normal',
-                        color: activeTab === 'list' ? '#007bff' : '#6c757d',
-                        background: 'none',
-                        border: 'none',
-                        borderTopLeftRadius: '4px',
-                        borderTopRightRadius: '4px',
-                        transition: 'all 0.2s ease'
-                    }}
-                >
-                    List View
-                </button>
-            </div>
-
-            {/* Calendar Tab */}
-            {activeTab === 'calendar' && (
-                <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            {/* 2-Column Layout */}
+            <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: '1fr 1fr', 
+                gap: '20px',
+                alignItems: 'start'
+            }}>
+                {/* Left Column - Calendar */}
+                <div style={{ 
+                    background: 'white', 
+                    padding: '20px', 
+                    borderRadius: '8px', 
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                }}>
+                    <div style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'center', 
+                        marginBottom: '20px' 
+                    }}>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
                             <button 
                                 onClick={() => navigateMonth('prev')}
@@ -460,22 +920,25 @@ const Appointments = () => {
                                 <ChevronRight size={20} color="#007bff" />
                             </button>
                         </div>
-                        <button 
-                            onClick={() => setShowAddModal(true)}
-                            style={{
-                                padding: '8px 16px',
-                                background: '#007bff',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                transition: 'background 0.2s ease'
-                            }}
-                            onMouseEnter={(e) => e.target.style.background = '#0056b3'}
-                            onMouseLeave={(e) => e.target.style.background = '#007bff'}
-                        >
-                            Book Appointment
-                        </button>
+                        {/* Only show Book Appointment button for physicians, case managers, and admins */}
+                        {(currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin') && (
+                            <button 
+                                onClick={() => setShowAddModal(true)}
+                                style={{
+                                    padding: '8px 16px',
+                                    background: '#007bff',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    transition: 'background 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => e.target.style.background = '#0056b3'}
+                                onMouseLeave={(e) => e.target.style.background = '#007bff'}
+                            >
+                                Book Appointment
+                            </button>
+                        )}
                     </div>
                     <div style={{
                         display: 'grid',
@@ -484,80 +947,50 @@ const Appointments = () => {
                     }}>
                         {renderCalendar()}
                     </div>
-                    {selectedDay && (
-                        <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
-                            <h4 style={{ marginTop: 0, color: '#333' }}>
-                                Appointments for {currentMonth.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                            </h4>
-                            {getAppointmentsForDay(selectedDay).length > 0 ? (
-                                renderAppointmentList(getAppointmentsForDay(selectedDay))
+                </div>
+
+                {/* Right Column - Appointments List */}
+                <div style={{ 
+                    background: 'white', 
+                    padding: '20px', 
+                    borderRadius: '8px', 
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                    maxHeight: 'calc(100vh - 200px)',
+                    overflowY: 'auto'
+                }}>
+                    <div style={{ marginBottom: '20px' }}>
+                        <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>
+                            {selectedDay ? (
+                                `Appointments for ${currentMonth.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`
                             ) : (
-                                <p style={{ color: '#6c757d' }}>No appointments scheduled for this day</p>
+                                'Select a date to view appointments'
                             )}
+                        </h3>
+                        {selectedDay && (
+                            <p style={{ margin: 0, color: '#6c757d', fontSize: '14px' }}>
+                                {filteredAppointments.length} appointment{filteredAppointments.length !== 1 ? 's' : ''} scheduled
+                            </p>
+                        )}
+                    </div>
+                    {loading ? (
+                        <div style={{ textAlign: 'center', padding: '40px', color: '#6c757d' }}>
+                            Loading appointments...
                         </div>
+                    ) : (
+                        renderAppointmentList(filteredAppointments)
                     )}
                 </div>
-            )}
-
-            {/* List Tab */}
-            {activeTab === 'list' && (
-                <div style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                        <div style={{ display: 'flex', gap: '10px' }}>
-                            <input 
-                                type="text"
-                                placeholder="Search appointments..."
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                                style={{
-                                    padding: '8px 12px',
-                                    border: '1px solid #ced4da',
-                                    borderRadius: '4px',
-                                    width: '250px'
-                                }}
-                            />
-                            <select 
-                                value={statusFilter}
-                                onChange={(e) => setStatusFilter(e.target.value)}
-                                style={{
-                                    padding: '8px 12px',
-                                    border: '1px solid #ced4da',
-                                    borderRadius: '4px'
-                                }}
-                            >
-                                <option value="all">All Status</option>
-                                <option value="SCHEDULED">Scheduled</option>
-                                <option value="COMPLETED">Completed</option>
-                                <option value="CANCELLED">Cancelled</option>
-                            </select>
-                        </div>
-                        <button 
-                            onClick={() => setShowAddModal(true)}
-                            style={{
-                                padding: '8px 16px',
-                                background: '#007bff',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                transition: 'background 0.2s ease'
-                            }}
-                            onMouseEnter={(e) => e.target.style.background = '#0056b3'}
-                            onMouseLeave={(e) => e.target.style.background = '#007bff'}
-                        >
-                            Book Appointment
-                        </button>
-                    </div>
-                    <div>
-                        {renderAppointmentList(filteredAppointments)}
-                    </div>
-                </div>
-            )}
+            </div>
 
             {/* Add Appointment Modal */}
             {showAddModal && (
                 <AppointmentModal
                     mode="add"
+                    patients={patients}
+                    facilities={facilities}
+                    providers={providers}
+                    currentUserRole={currentUserRole}
+                    currentPatientId={currentPatientId}
                     onClose={() => setShowAddModal(false)}
                     onSave={handleAddAppointment}
                 />
@@ -568,6 +1001,12 @@ const Appointments = () => {
                 <AppointmentModal
                     mode="edit"
                     appointment={selectedAppointment}
+                    patients={patients}
+                    facilities={facilities}
+                    providers={providers}
+                    currentUserRole={currentUserRole}
+                    currentPatientId={currentPatientId}
+                    canEdit={currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin'}
                     onClose={() => {
                         setShowEditModal(false);
                         setSelectedAppointment(null);
@@ -620,22 +1059,102 @@ const Appointments = () => {
     );
 };
 
-const AppointmentModal = ({ mode, appointment, onClose, onSave }) => {
+const AppointmentModal = ({ mode, appointment, patients, facilities, providers, currentUserRole, currentPatientId, canEdit = true, onClose, onSave }) => {
+    // Helper to parse MySQL DATETIME format
+    const parseDateTime = (dateTimeString) => {
+        if (!dateTimeString) return { date: '', time: '' };
+        // Handle both ISO format and MySQL DATETIME format (YYYY-MM-DD HH:MM:SS)
+        const date = new Date(dateTimeString);
+        if (isNaN(date.getTime())) {
+            // Try parsing MySQL format directly
+            const parts = dateTimeString.split(' ');
+            if (parts.length === 2) {
+                return {
+                    date: parts[0],
+                    time: parts[1].slice(0, 5)
+                };
+            }
+            return { date: '', time: '' };
+        }
+        return {
+            date: date.toISOString().split('T')[0],
+            time: date.toTimeString().slice(0, 5)
+        };
+    };
+
+    const parsedDateTime = appointment ? parseDateTime(appointment.scheduled_start) : { date: '', time: '' };
+
+    // If user is a patient and it's add mode, auto-select their patient_id (dropdown will be hidden)
+    const initialPatientId = mode === 'add' && currentUserRole?.toLowerCase() === 'patient' && currentPatientId 
+        ? currentPatientId 
+        : (appointment ? appointment.patient_id : '');
+
+    // Only show provider field for physician and case_manager roles
+    const canEditProvider = currentUserRole === 'physician' || currentUserRole === 'case_manager' || currentUserRole === 'admin';
+    
+    // Determine if form should be editable
+    // In add mode: all fields are editable
+    // In edit mode: only provider field is editable, all other fields are read-only
+    const isEditable = mode === 'add' ? true : false;
+    const canEditProviderField = mode === 'add' ? true : (canEdit && canEditProvider);
+
     const [formData, setFormData] = useState(
-        appointment || {
-            patientName: '',
+        appointment ? {
+            patient_id: appointment.patient_id,
+            provider_id: appointment.provider_id || '',
+            facility_id: appointment.facility_id,
+            appointment_type: appointment.appointment_type,
+            appointmentDate: parsedDateTime.date,
+            appointmentTime: parsedDateTime.time,
+            duration_minutes: appointment.duration_minutes || 30,
+            reason: appointment.reason || '',
+            notes: appointment.notes || ''
+        } : {
+            patient_id: initialPatientId,
+            provider_id: '',
+            facility_id: '',
+            appointment_type: '',
             appointmentDate: '',
             appointmentTime: '',
-            facilityName: '',
-            providerName: '',
-            type: '',
+            duration_minutes: 30,
+            reason: '',
             notes: ''
         }
     );
+    
+    // Get patient name for display when patient dropdown is hidden
+    const getPatientName = () => {
+        if (currentUserRole?.toLowerCase() === 'patient' && currentPatientId) {
+            const patient = patients.find(p => p.patient_id === currentPatientId);
+            if (patient) {
+                return `${patient.first_name} ${patient.last_name}${patient.uic ? ` (${patient.uic})` : ''}`;
+            }
+        }
+        return null;
+    };
+
+    // Update patient_id when currentPatientId becomes available (for patient users)
+    useEffect(() => {
+        if (mode === 'add' && currentUserRole?.toLowerCase() === 'patient' && currentPatientId && !formData.patient_id) {
+            setFormData(prev => ({
+                ...prev,
+                patient_id: currentPatientId
+            }));
+        }
+    }, [currentPatientId, currentUserRole, mode, formData.patient_id]);
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        onSave(formData);
+        // Allow submission if form is editable OR if provider field can be edited
+        if (!isEditable && !canEditProviderField) {
+            return;
+        }
+        // Ensure patient_id is set for patient users (dropdown is hidden for them)
+        if (currentUserRole?.toLowerCase() === 'patient' && currentPatientId) {
+            onSave({ ...formData, patient_id: currentPatientId });
+        } else {
+            onSave(formData);
+        }
     };
 
     const handleChange = (e) => {
@@ -671,7 +1190,7 @@ const AppointmentModal = ({ mode, appointment, onClose, onSave }) => {
             }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                     <h2 style={{ margin: 0 }}>
-                        {mode === 'add' ? 'Book Appointment' : 'Edit Appointment'}
+                        {mode === 'add' ? 'Book Appointment' : (isEditable ? 'Edit Appointment' : 'View Appointment')}
                     </h2>
                     <button
                         onClick={onClose}
@@ -692,21 +1211,46 @@ const AppointmentModal = ({ mode, appointment, onClose, onSave }) => {
                 <form onSubmit={handleSubmit}>
                     <div style={{ marginBottom: '15px' }}>
                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                            Patient Name <span style={{ color: 'red' }}>*</span>
+                            Patient <span style={{ color: 'red' }}>*</span>
                         </label>
-                        <input 
-                            type="text"
-                            name="patientName"
-                            value={formData.patientName}
-                            onChange={handleChange}
-                            required
-                            style={{
+                        {currentUserRole?.toLowerCase() === 'patient' ? (
+                            // If user is a patient, show read-only patient name (no dropdown)
+                            <div style={{
                                 width: '100%',
                                 padding: '8px',
                                 border: '1px solid #ced4da',
-                                borderRadius: '4px'
-                            }}
-                        />
+                                borderRadius: '4px',
+                                backgroundColor: '#f8f9fa',
+                                color: '#495057',
+                                cursor: 'not-allowed'
+                            }}>
+                                {getPatientName() || 'Loading...'}
+                            </div>
+                        ) : (
+                            // If user is not a patient, show dropdown
+                            <select 
+                                name="patient_id"
+                                value={formData.patient_id}
+                                onChange={handleChange}
+                                required
+                                disabled={mode === 'edit' || !isEditable}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px',
+                                    border: '1px solid #ced4da',
+                                    borderRadius: '4px',
+                                    backgroundColor: !isEditable ? '#f8f9fa' : 'white',
+                                    cursor: !isEditable ? 'not-allowed' : 'pointer'
+                                }}
+                            >
+                                <option value="">Select Patient</option>
+                                {patients.map(patient => (
+                                    <option key={patient.patient_id} value={patient.patient_id}>
+                                        {patient.first_name} {patient.last_name} {patient.uic ? `(${patient.uic})` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        )}
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
@@ -720,12 +1264,15 @@ const AppointmentModal = ({ mode, appointment, onClose, onSave }) => {
                                 value={formData.appointmentDate}
                                 onChange={handleChange}
                                 required
+                                disabled={!isEditable}
                                 min={new Date().toISOString().split('T')[0]}
                                 style={{
                                     width: '100%',
                                     padding: '8px',
                                     border: '1px solid #ced4da',
-                                    borderRadius: '4px'
+                                    borderRadius: '4px',
+                                    backgroundColor: !isEditable ? '#f8f9fa' : 'white',
+                                    cursor: !isEditable ? 'not-allowed' : 'pointer'
                                 }}
                             />
                         </div>
@@ -739,11 +1286,14 @@ const AppointmentModal = ({ mode, appointment, onClose, onSave }) => {
                                 value={formData.appointmentTime}
                                 onChange={handleChange}
                                 required
+                                disabled={!isEditable}
                                 style={{
                                     width: '100%',
                                     padding: '8px',
                                     border: '1px solid #ced4da',
-                                    borderRadius: '4px'
+                                    borderRadius: '4px',
+                                    backgroundColor: !isEditable ? '#f8f9fa' : 'white',
+                                    cursor: !isEditable ? 'not-allowed' : 'pointer'
                                 }}
                             />
                         </div>
@@ -753,63 +1303,133 @@ const AppointmentModal = ({ mode, appointment, onClose, onSave }) => {
                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
                             Facility <span style={{ color: 'red' }}>*</span>
                         </label>
-                        <input 
-                            type="text"
-                            name="facilityName"
-                            value={formData.facilityName}
-                            onChange={handleChange}
-                            required
-                            style={{
-                                width: '100%',
-                                padding: '8px',
-                                border: '1px solid #ced4da',
-                                borderRadius: '4px'
-                            }}
-                        />
-                    </div>
-
-                    <div style={{ marginBottom: '15px' }}>
-                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                            Provider <span style={{ color: 'red' }}>*</span>
-                        </label>
-                        <input 
-                            type="text"
-                            name="providerName"
-                            value={formData.providerName}
-                            onChange={handleChange}
-                            required
-                            style={{
-                                width: '100%',
-                                padding: '8px',
-                                border: '1px solid #ced4da',
-                                borderRadius: '4px'
-                            }}
-                        />
-                    </div>
-
-                    <div style={{ marginBottom: '15px' }}>
-                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                            Appointment Type <span style={{ color: 'red' }}>*</span>
-                        </label>
                         <select 
-                            name="type"
-                            value={formData.type}
+                            name="facility_id"
+                            value={formData.facility_id}
                             onChange={handleChange}
                             required
+                            disabled={!isEditable}
                             style={{
                                 width: '100%',
                                 padding: '8px',
                                 border: '1px solid #ced4da',
-                                borderRadius: '4px'
+                                borderRadius: '4px',
+                                backgroundColor: !isEditable ? '#f8f9fa' : 'white',
+                                cursor: !isEditable ? 'not-allowed' : 'pointer'
                             }}
                         >
-                            <option value="">Select Type</option>
-                            <option value="INITIAL CONSULTATION">Initial Consultation</option>
-                            <option value="FOLLOW-UP CONSULTATION">Follow-up Consultation</option>
-                            <option value="ART PICKUP">ART Pickup</option>
-                            <option value="Lab Test">Lab Test</option>
-                            <option value="Counseling">Counseling</option>
+                            <option value="">Select Facility</option>
+                            {facilities.map(facility => (
+                                <option key={facility.facility_id} value={facility.facility_id}>
+                                    {facility.facility_name}
+                                </option>
+                            ))}
                         </select>
+                    </div>
+
+                    {/* Only show provider field for physician and case_manager roles */}
+                    {canEditProvider && (
+                        <div style={{ marginBottom: '15px' }}>
+                            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                                Provider
+                            </label>
+                            <select 
+                                name="provider_id"
+                                value={formData.provider_id}
+                                onChange={handleChange}
+                                disabled={!canEditProviderField}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px',
+                                    border: '1px solid #ced4da',
+                                    borderRadius: '4px',
+                                    backgroundColor: !canEditProviderField ? '#f8f9fa' : 'white',
+                                    cursor: !canEditProviderField ? 'not-allowed' : 'pointer'
+                                }}
+                            >
+                                <option value="">Select Provider (Optional)</option>
+                                {providers.map(provider => (
+                                    <option key={provider.user_id} value={provider.user_id}>
+                                        {provider.full_name || provider.username} ({provider.role})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                                Appointment Type <span style={{ color: 'red' }}>*</span>
+                            </label>
+                            <select 
+                                name="appointment_type"
+                                value={formData.appointment_type}
+                                onChange={handleChange}
+                                required
+                                disabled={!isEditable}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px',
+                                    border: '1px solid #ced4da',
+                                    borderRadius: '4px',
+                                    backgroundColor: !isEditable ? '#f8f9fa' : 'white',
+                                    cursor: !isEditable ? 'not-allowed' : 'pointer'
+                                }}
+                            >
+                                <option value="">Select Type</option>
+                                <option value="initial">Initial Consultation</option>
+                                <option value="follow_up">Follow-up Consultation</option>
+                                <option value="art_pickup">ART Pickup</option>
+                                <option value="lab_test">Lab Test</option>
+                                <option value="counseling">Counseling</option>
+                                <option value="general">General</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                                Duration (minutes)
+                            </label>
+                            <input 
+                                type="number"
+                                name="duration_minutes"
+                                value={formData.duration_minutes}
+                                onChange={handleChange}
+                                min="15"
+                                max="240"
+                                step="15"
+                                disabled={!isEditable}
+                                style={{
+                                    width: '100%',
+                                    padding: '8px',
+                                    border: '1px solid #ced4da',
+                                    borderRadius: '4px',
+                                    backgroundColor: !isEditable ? '#f8f9fa' : 'white',
+                                    cursor: !isEditable ? 'not-allowed' : 'pointer'
+                                }}
+                            />
+                        </div>
+                    </div>
+
+                    <div style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Reason
+                        </label>
+                        <input 
+                            type="text"
+                            name="reason"
+                            value={formData.reason}
+                            onChange={handleChange}
+                            disabled={!isEditable}
+                            style={{
+                                width: '100%',
+                                padding: '8px',
+                                border: '1px solid #ced4da',
+                                borderRadius: '4px',
+                                backgroundColor: !isEditable ? '#f8f9fa' : 'white',
+                                cursor: !isEditable ? 'not-allowed' : 'text'
+                            }}
+                        />
                     </div>
 
                     <div style={{ marginBottom: '20px' }}>
@@ -821,12 +1441,15 @@ const AppointmentModal = ({ mode, appointment, onClose, onSave }) => {
                             value={formData.notes}
                             onChange={handleChange}
                             rows="3"
+                            disabled={!isEditable}
                             style={{
                                 width: '100%',
                                 padding: '8px',
                                 border: '1px solid #ced4da',
                                 borderRadius: '4px',
-                                fontFamily: 'inherit'
+                                fontFamily: 'inherit',
+                                backgroundColor: !isEditable ? '#f8f9fa' : 'white',
+                                cursor: !isEditable ? 'not-allowed' : 'text'
                             }}
                         />
                     </div>
@@ -847,24 +1470,26 @@ const AppointmentModal = ({ mode, appointment, onClose, onSave }) => {
                             onMouseEnter={(e) => e.target.style.background = '#5a6268'}
                             onMouseLeave={(e) => e.target.style.background = '#6c757d'}
                         >
-                            Cancel
+                            {isEditable ? 'Cancel' : 'Close'}
                         </button>
-                        <button 
-                            type="submit"
-                            style={{
-                                padding: '8px 16px',
-                                background: '#007bff',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                transition: 'background 0.2s ease'
-                            }}
-                            onMouseEnter={(e) => e.target.style.background = '#0056b3'}
-                            onMouseLeave={(e) => e.target.style.background = '#007bff'}
-                        >
-                            {mode === 'add' ? 'Book Appointment' : 'Update Appointment'}
-                        </button>
+                        {(isEditable || canEditProviderField) && (
+                            <button 
+                                type="submit"
+                                style={{
+                                    padding: '8px 16px',
+                                    background: '#007bff',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    transition: 'background 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => e.target.style.background = '#0056b3'}
+                                onMouseLeave={(e) => e.target.style.background = '#007bff'}
+                            >
+                                {mode === 'add' ? 'Book Appointment' : 'Update Provider'}
+                            </button>
+                        )}
                     </div>
                 </form>
             </div>
