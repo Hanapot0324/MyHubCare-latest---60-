@@ -33,6 +33,8 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -59,41 +61,49 @@ const Dashboard = ({ socket }) => {
   const [stats, setStats] = useState({
     totalPatients: 3,
     todayAppointments: 0,
-    lowStockAlerts: 0,
+    lowStockAlerts: 1,
     monthlyPrescriptions: 0,
   });
 
   const [patientRegistrationData, setPatientRegistrationData] = useState([
-    { name: 'Jan', patients: 2 },
-    { name: 'Feb', patients: 3 },
-    { name: 'Mar', patients: 5 },
-    { name: 'Apr', patients: 4 },
-    { name: 'May', patients: 6 },
-    { name: 'Jun', patients: 8 },
+    { name: 'Jun', patients: 0 },
+    { name: 'Jul', patients: 0 },
+    { name: 'Aug', patients: 0 },
+    { name: 'Sep', patients: 0 },
+    { name: 'Oct', patients: 0 },
+    { name: 'Nov', patients: 3 },
   ]);
 
   const [monthlyAppointmentsData, setMonthlyAppointmentsData] = useState([
-    { name: 'Jan', appointments: 10 },
-    { name: 'Feb', appointments: 15 },
-    { name: 'Mar', appointments: 12 },
-    { name: 'Apr', appointments: 18 },
-    { name: 'May', appointments: 14 },
-    { name: 'Jun', appointments: 20 },
+    { name: 'Jun', appointments: 0 },
+    { name: 'Jul', appointments: 0 },
+    { name: 'Aug', appointments: 0 },
+    { name: 'Sep', appointments: 0 },
+    { name: 'Oct', appointments: 0 },
+    { name: 'Nov', appointments: 3 },
   ]);
 
   const [riskDistributionData, setRiskDistributionData] = useState([
-    { name: 'Low', value: 60, color: '#4caf50' },
-    { name: 'Medium', value: 30, color: '#ff9800' },
-    { name: 'High', value: 10, color: '#f44336' },
+    { name: 'Low', value: 33.3, color: '#4caf50' },
+    { name: 'Medium', value: 16.7, color: '#ff9800' },
+    { name: 'High', value: 33.3, color: '#f44336' },
+    { name: 'Critical', value: 16.7, color: '#8b0000' },
   ]);
 
   const [monthlyPrescriptionsData, setMonthlyPrescriptionsData] = useState([
-    { name: 'Jan', prescriptions: 5 },
-    { name: 'Feb', prescriptions: 8 },
-    { name: 'Mar', prescriptions: 7 },
-    { name: 'Apr', prescriptions: 10 },
-    { name: 'May', prescriptions: 9 },
-    { name: 'Jun', prescriptions: 12 },
+    { name: 'Jun', prescriptions: 0 },
+    { name: 'Jul', prescriptions: 0 },
+    { name: 'Aug', prescriptions: 0 },
+    { name: 'Sep', prescriptions: 0 },
+    { name: 'Oct', prescriptions: 2 },
+    { name: 'Nov', prescriptions: 0 },
+  ]);
+
+  const [recentActivity, setRecentActivity] = useState([
+    { type: 'Follow-up', patient: 'John Doe', date: '10/15/2025', time: '8:00:00 AM', icon: 'calendar', color: '#9c27b0' },
+    { type: 'Prescription', patient: 'John Doe', date: '10/15/2025', time: '8:00:00 AM', icon: 'medication', color: '#ec407a' },
+    { type: 'Follow-up', patient: 'Maria Santos', date: '10/10/2025', time: '8:00:00 AM', icon: 'calendar', color: '#9c27b0' },
+    { type: 'Prescription', patient: 'Maria Santos', date: '10/10/2025', time: '8:00:00 AM', icon: 'medication', color: '#ec407a' },
   ]);
 
   const [alerts, setAlerts] = useState([]);
@@ -259,18 +269,40 @@ const Dashboard = ({ socket }) => {
   };
 
   const StatCard = ({ title, value, icon, color }) => (
-    <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <CardContent sx={{ flexGrow: 1 }}>
-        <Box display="flex" alignItems="center">
-          <Box sx={{ mr: 2, color }}>{icon}</Box>
+    <Card sx={{ 
+      height: '100%', 
+      display: 'flex', 
+      flexDirection: 'column',
+      backgroundColor: 'white',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+      borderRadius: '8px',
+    }}>
+      <CardContent sx={{ flexGrow: 1, p: 3 }}>
+        <Box display="flex" alignItems="center" justifyContent="space-between">
           <Box>
-            <Typography color="textSecondary" gutterBottom variant="h6">
-              {title}
-            </Typography>
-            <Typography variant="h4" component="h2">
+            <Typography 
+              variant="h4" 
+              component="h2" 
+              sx={{ 
+                fontWeight: 700, 
+                color: '#333',
+                mb: 0.5,
+                fontSize: '32px',
+              }}
+            >
               {value}
             </Typography>
+            <Typography 
+              variant="body1" 
+              sx={{ 
+                color: '#666',
+                fontSize: '14px',
+              }}
+            >
+              {title}
+            </Typography>
           </Box>
+          <Box sx={{ color, fontSize: '40px' }}>{icon}</Box>
         </Box>
       </CardContent>
     </Card>
@@ -636,74 +668,130 @@ const Dashboard = ({ socket }) => {
         p: { xs: 2, sm: 3 },
         width: '100%',
         overflowX: 'hidden',
+        backgroundColor: '#f5f5f5',
+        minHeight: '100vh',
       }}
     >
-      <Grid container spacing={{ xs: 2, sm: 3 }}>
+      {/* Header Section */}
+      <Box sx={{ mb: 3 }}>
+        <Typography
+          variant="h4"
+          sx={{
+            fontWeight: 700,
+            color: '#333',
+            mb: 0.5,
+            fontSize: { xs: '24px', sm: '28px' },
+            marginTop: '80px'
+          }}
+        >
+          Dashboard Overview
+        </Typography>
+        <Typography
+          variant="body1"
+          sx={{
+            color: '#666',
+            fontSize: '14px',
+          }}
+        >
+          Real-time system statistics and alerts
+        </Typography>
+      </Box>
+
+      <Grid container spacing={{ xs: 1, sm: 1 }}>
         {/* Statistics Cards */}
-        <Grid item xs={12} sm={6} lg={3}>
-          <StatCard
-            title="Total Patients"
-            value={stats.totalPatients}
-            icon={<PeopleIcon fontSize="large" />}
-            color="#1976d2"
-          />
-        </Grid>
+        <Grid item xs={12} sm={6} lg={3} sx={{ ml: 12.5 }}>
+  <StatCard
+    title="Total Patients"
+    value={stats.totalPatients}
+    icon={<PeopleIcon sx={{ fontSize: 40, width: '112px' }} />}
+    color="#9c27b0"
+  />
+</Grid>
+
         <Grid item xs={12} sm={6} lg={3}>
           <StatCard
             title="Today's Appointments"
             value={stats.todayAppointments}
-            icon={<AppointmentIcon fontSize="large" />}
-            color="#4caf50"
+            icon={<AppointmentIcon sx={{ fontSize: 40, width: '34px' }} />}
+            color="#1976d2"
           />
         </Grid>
         <Grid item xs={12} sm={6} lg={3}>
           <StatCard
             title="Low Stock Alerts"
             value={stats.lowStockAlerts}
-            icon={<WarningIcon fontSize="large" />}
+            icon={<WarningIcon sx={{ fontSize: 40, width: '70px' }} />}
             color="#ff9800"
           />
         </Grid>
         <Grid item xs={12} sm={6} lg={3}>
           <StatCard
-            title="Monthly Prescriptions"
+            title="Prescriptions This Month"
             value={stats.monthlyPrescriptions}
-            icon={<PrescriptionIcon fontSize="large" />}
-            color="#9c27b0"
+            icon={<PrescriptionIcon sx={{ fontSize: 40, width: '45px' }} />}
+            color="#ec407a"
           />
         </Grid>
 
         {/* Charts */}
-        <Grid item xs={12} lg={6}>
-          <Paper sx={{ p: 2, height: { xs: 300, sm: 350, md: 400 } }}>
-            <Typography variant="h6" gutterBottom>
-              Patient Registration Trend
+        <Grid item xs={12} lg={6} sx={{ mt: 1 }}>
+          <Paper sx={{ 
+            p: 3, 
+            height: { xs: 300, sm: 350, md: 400 },
+            backgroundColor: 'white',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            borderRadius: '8px',
+            minHeight: '200px', 
+            width: '500px',
+            marginLeft: '100px',
+          }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, color: '#333', mb: 0.5 }}>
+              Patient Enrollment Trend
+            </Typography>
+            <Typography variant="body2" sx={{ color: '#666', mb: 2, fontSize: '12px' }}>
+              Last 6 Months
             </Typography>
             <ResponsiveContainer width="100%" height="85%">
-              <LineChart data={patientRegistrationData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
+              <AreaChart data={patientRegistrationData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                <XAxis dataKey="name" stroke="#666" />
+                <YAxis domain={[0, 3]} stroke="#666" />
                 <Tooltip />
-                <Legend />
-                <Line type="monotone" dataKey="patients" stroke="#1976d2" />
-              </LineChart>
+                <Area
+                  type="monotone"
+                  dataKey="patients"
+                  stroke="#1976d2"
+                  fill="#1976d2"
+                  fillOpacity={0.3}
+                />
+              </AreaChart>
             </ResponsiveContainer>
           </Paper>
         </Grid>
 
-        <Grid item xs={12} lg={6}>
-          <Paper sx={{ p: 2, height: { xs: 300, sm: 350, md: 400 } }}>
-            <Typography variant="h6" gutterBottom>
+          <Grid item xs={12} lg={6} sx={{ mt: 1 }}>
+          <Paper sx={{ 
+            p: 3, 
+            height: { xs: 300, sm: 350, md: 400 },
+            backgroundColor: 'white',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            borderRadius: '8px',
+            minHeight: '200px', 
+            width: '500px',
+            marginRight: '90px',  
+          }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, color: '#333', mb: 0.5 }}>
               Monthly Appointments
+            </Typography>
+            <Typography variant="body2" sx={{ color: '#666', mb: 2, fontSize: '12px' }}>
+              Last 6 Months
             </Typography>
             <ResponsiveContainer width="100%" height="85%">
               <BarChart data={monthlyAppointmentsData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                <XAxis dataKey="name" stroke="#666" />
+                <YAxis domain={[0, 3]} stroke="#666" />
                 <Tooltip />
-                <Legend />
                 <Bar dataKey="appointments" fill="#4caf50" />
               </BarChart>
             </ResponsiveContainer>
@@ -711,8 +799,17 @@ const Dashboard = ({ socket }) => {
         </Grid>
 
         <Grid item xs={12} lg={6}>
-          <Paper sx={{ p: 2, height: { xs: 300, sm: 350, md: 400 } }}>
-            <Typography variant="h6" gutterBottom>
+          <Paper sx={{ 
+            p: 3, 
+            height: { xs: 300, sm: 350, md: 400 },
+            backgroundColor: 'white',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            borderRadius: '8px',
+            minHeight: '200px', 
+            width: '500px',
+            marginLeft: '100px'   
+          }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, color: '#333', mb: 2 }}>
               Risk Distribution
             </Typography>
             <ResponsiveContainer width="100%" height="85%">
@@ -723,7 +820,7 @@ const Dashboard = ({ socket }) => {
                   cy="50%"
                   labelLine={false}
                   label={({ name, percent }) =>
-                    `${name} ${(percent * 100).toFixed(0)}%`
+                    `${name} (${(percent * 100).toFixed(1)}%)`
                   }
                   outerRadius={80}
                   fill="#8884d8"
@@ -736,68 +833,180 @@ const Dashboard = ({ socket }) => {
                 <Tooltip />
               </PieChart>
             </ResponsiveContainer>
+            <Typography
+              variant="body2"
+              sx={{
+                textAlign: 'center',
+                mt: 1,
+                color: '#666',
+                fontWeight: 600,
+              }}
+            >
+              Total 6
+            </Typography>
           </Paper>
         </Grid>
 
         <Grid item xs={12} lg={6}>
-          <Paper sx={{ p: 2, height: { xs: 300, sm: 350, md: 400 } }}>
-            <Typography variant="h6" gutterBottom>
+          <Paper sx={{ 
+            p: 3, 
+            height: { xs: 300, sm: 350, md: 400 },
+            backgroundColor: 'white',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            borderRadius: '8px',
+            minHeight: '200px', 
+            width: '500px',
+            marginRight: '80px', 
+          }}>
+            <Typography variant="h6" sx={{ fontWeight: 600, color: '#333', mb: 0.5 }}>
               Monthly Prescriptions
             </Typography>
+            <Typography variant="body2" sx={{ color: '#666', mb: 2, fontSize: '12px' }}>
+              Last 6 Months
+            </Typography>
             <ResponsiveContainer width="100%" height="85%">
-              <LineChart data={monthlyPrescriptionsData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" />
-                <YAxis />
+              <AreaChart data={monthlyPrescriptionsData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                <XAxis dataKey="name" stroke="#666" />
+                <YAxis domain={[0, 2]} stroke="#666" />
                 <Tooltip />
-                <Legend />
-                <Line
+                <Area
                   type="monotone"
                   dataKey="prescriptions"
                   stroke="#9c27b0"
+                  fill="#9c27b0"
+                  fillOpacity={0.3}
                 />
-              </LineChart>
+              </AreaChart>
             </ResponsiveContainer>
           </Paper>
         </Grid>
 
-        {/* System Alerts */}
+        {/* System Alerts Card */}
         <Grid item xs={12}>
-          <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
+          <Paper
+            sx={{
+              p: 3,
+              backgroundColor: 'white',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              borderRadius: '8px',
+              width: '1009px',
+              marginLeft: '100px',
+              marginTop: '10px'
+            }}
+          >
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: 700,
+                color: '#333',
+                mb: 2,
+              }}
+            >
               System Alerts
             </Typography>
-            {alerts.length === 0 ? (
-              <Alert severity="info">
-                <AlertTitle>No alerts</AlertTitle>
-                All systems are running normally.
-              </Alert>
-            ) : (
-              <TableContainer sx={{ overflowX: 'auto' }}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Time</TableCell>
-                      <TableCell>Type</TableCell>
-                      <TableCell>Message</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {alerts.map((alert, index) => (
-                      <TableRow key={index}>
-                        <TableCell>{alert.time}</TableCell>
-                        <TableCell>
-                          <Alert severity={alert.severity} sx={{ py: 0 }}>
-                            {alert.type}
-                          </Alert>
-                        </TableCell>
-                        <TableCell>{alert.message}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
+            <Paper
+              sx={{
+                p: 2,
+                backgroundColor: '#fff9c4',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <Typography sx={{ color: '#8b4513', fontSize: '14px' }}>
+                {stats.lowStockAlerts} medication(s) are low in stock
+              </Typography>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => navigate('/inventory')}
+                sx={{
+                  textTransform: 'none',
+                  backgroundColor: '#f5f5f5',
+                  borderColor: '#d0d0d0',
+                  color: '#333',
+                  fontSize: '12px',
+                  px: 2,
+                  py: 0.5,
+                  minWidth: 'auto',
+                  '&:hover': {
+                    backgroundColor: '#e8e8e8',
+                    borderColor: '#b0b0b0',
+                  },
+                }}
+              >
+                View
+              </Button>
+            </Paper>
+          </Paper>
+        </Grid>
+
+        {/* Recent Activity Card */}
+        <Grid item xs={12}>
+          <Paper
+            sx={{
+              p: 3,
+              backgroundColor: 'white',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+              borderRadius: '8px',
+               width: '1009px',
+              marginLeft: '100px',
+              marginTop: '5px'
+            }}
+          >
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: 700,
+                color: '#333',
+                mb: 2,
+              }}
+            >
+              Recent Activity
+            </Typography>
+            <Box>
+              {recentActivity.map((activity, index) => (
+                <Box
+                  key={index}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    pb: 2,
+                    mb: 2,
+                    borderBottom: index < recentActivity.length - 1 ? '1px solid #e0e0e0' : 'none',
+                  }}
+                >
+                  <Box
+                    sx={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: '50%',
+                      backgroundColor: activity.color + '20',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      mr: 2,
+                    }}
+                  >
+                    {activity.icon === 'calendar' ? (
+                      <CalendarIcon sx={{ color: activity.color, fontSize: 20 }} />
+                    ) : (
+                      <PrescriptionIcon sx={{ color: activity.color, fontSize: 20 }} />
+                    )}
+                  </Box>
+                  <Box sx={{ flexGrow: 1 }}>
+                    <Typography sx={{ color: '#333', fontWeight: 600, fontSize: '14px', mb: 0.5 }}>
+                      {activity.type === 'Prescription' ? `New prescription for ${activity.patient}` : `${activity.patient} - ${activity.type}`}
+                    </Typography>
+                    <Typography sx={{ color: '#666', fontSize: '12px' }}>
+                      {activity.date}, {activity.time}
+                    </Typography>
+                  </Box>
+                </Box>
+              ))}
+            </Box>
           </Paper>
         </Grid>
       </Grid>

@@ -31,6 +31,9 @@ import Settings from './components/Settings.jsx';
 import MedicationAdherence from './components/MedicationAdherence.jsx';
 import MyAppointments from './components/MyAppointments.jsx';
 import CareTasks from './components/CareTasks.jsx';
+import Reports from './components/Reports.jsx';
+import AuditTrail from './components/AuditTrail.jsx';
+import Education from './components/Education.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import { SOCKET_URL } from './config/api';
 
@@ -252,6 +255,30 @@ export default function App() {
             element={
               <MainLayout socket={socket}>
                 <CareTasks socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/reports"
+            element={
+              <MainLayout socket={socket}>
+                <Reports socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/audit-trail"
+            element={
+              <MainLayout socket={socket}>
+                <AuditTrail socket={socket} />
+              </MainLayout>
+            }
+          />
+          <Route
+            path="/education"
+            element={
+              <MainLayout socket={socket}>
+                <Education socket={socket} />
               </MainLayout>
             }
           />

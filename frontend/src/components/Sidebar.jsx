@@ -31,6 +31,9 @@ import {
   Vaccines as VaccinesIcon,
   Person as PersonIcon,
   ListAlt as ListAltIcon,
+  Assessment as AssessmentIcon,
+  History as HistoryIcon,
+  School as SchoolIcon,
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -47,12 +50,15 @@ const allMenuItems = [
   { text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
   { text: 'Medication Reminder', icon: <MedicationIcon />, path: '/medication-adherence', roles: ['admin', 'physician', 'nurse', 'case_manager', 'patient'] },
   { text: 'ART Regimens', icon: <MedicationIcon />, path: '/art-regimen', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
+  { text: 'Education', icon: <SchoolIcon />, path: '/education', roles: ['admin', 'physician', 'nurse', 'case_manager', 'patient'] },
   { text: 'Vaccination Program', icon: <VaccinesIcon />, path: '/vaccination-program', roles: ['admin', 'physician', 'nurse'] },
   { text: 'Lab Test', icon: <ScienceIcon />, path: '/lab-test', roles: ['admin', 'physician', 'nurse', 'lab_personnel'] },
   { text: 'HTS Sessions', icon: <AssignmentIcon />, path: '/hts-sessions', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
   { text: 'Counseling Sessions', icon: <PeopleIcon />, path: '/counseling', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
   { text: 'Referrals', icon: <HospitalIcon />, path: '/referrals', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
   { text: 'Care Tasks', icon: <ListAltIcon />, path: '/care-tasks', roles: ['admin', 'case_manager'] },
+  { text: 'Reports', icon: <AssessmentIcon />, path: '/reports', roles: ['admin', 'physician'] },
+  { text: 'Audit Trail', icon: <HistoryIcon />, path: '/audit-trail', roles: ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel'] },
   { text: 'Branch', icon: <BusinessIcon />, path: '/branch-management', roles: ['admin'] },
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings', roles: ['admin', 'physician', 'nurse', 'case_manager', 'lab_personnel', 'patient'] },
 ];
