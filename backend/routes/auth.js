@@ -325,7 +325,20 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // 5. Generate session token
+    // 5. Check if MFA is enabled
+    if (user.mfa_enabled === 1 || user.mfa_enabled === true) {
+      // MFA is enabled - return response indicating MFA is required
+      // The frontend should then call /api/mfa/generate to get the MFA code
+      return res.status(200).json({
+        success: true,
+        requires_mfa: true,
+        message: "MFA verification required",
+        user_id: user.user_id,
+        // Don't return token yet - wait for MFA verification
+      });
+    }
+
+    // 6. Generate session token (only if MFA is not enabled)
     const token = jwt.sign(
       { 
         user_id: user.user_id, 
@@ -336,7 +349,7 @@ router.post("/login", async (req, res) => {
       { expiresIn: "24h" }
     );
 
-    // 6. Store session
+    // 7. Store session
     const session_id = uuidv4();
     const token_hash = await bcrypt.hash(token, 10);
     const expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
@@ -355,13 +368,13 @@ router.post("/login", async (req, res) => {
       ]
     );
 
-    // 7. Update last_login and reset failed attempts
+    // 8. Update last_login and reset failed attempts
     await db.query(
       "UPDATE users SET last_login = NOW(), failed_login_attempts = 0 WHERE user_id = ?", 
       [user.user_id]
     );
 
-    // 8. Get patient data if role is patient
+    // 9. Get patient data if role is patient
     let patientData = null;
     if (user.role === 'patient') {
       const [patients] = await db.query(
@@ -371,7 +384,7 @@ router.post("/login", async (req, res) => {
       patientData = patients[0] || null;
     }
 
-    // 9. Log successful login
+    // 10. Log successful login
     await logAudit({
       user_id: user.user_id,
       user_name: user.full_name || user.username,
@@ -512,6 +525,135 @@ router.get("/me", authenticateToken, async (req, res) => {
   } catch (err) {
     console.error("Profile error:", err);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// POST /api/auth/complete-login - Complete login after MFA verification
+router.post("/complete-login", async (req, res) => {
+  try {
+    const { user_id, mfa_token_id } = req.body;
+
+    // Validate required fields
+    if (!user_id || !mfa_token_id) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id and mfa_token_id are required",
+      });
+    }
+
+    // Verify that MFA token was consumed
+    const [tokens] = await db.query(
+      `SELECT mfa_token_id, user_id, consumed_at 
+       FROM mfa_tokens 
+       WHERE mfa_token_id = ? AND user_id = ? AND consumed_at IS NOT NULL`,
+      [mfa_token_id, user_id]
+    );
+
+    if (tokens.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: "MFA verification not completed or invalid",
+      });
+    }
+
+    // Get user from database
+    const [users] = await db.query(
+      "SELECT * FROM users WHERE user_id = ? AND status = 'active'",
+      [user_id]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const user = users[0];
+
+    // Generate session token
+    const token = jwt.sign(
+      { 
+        user_id: user.user_id, 
+        role: user.role,
+        facility_id: user.facility_id 
+      }, 
+      JWT_SECRET, 
+      { expiresIn: "24h" }
+    );
+
+    // Store session
+    const session_id = uuidv4();
+    const token_hash = await bcrypt.hash(token, 10);
+    const expires_at = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    await db.query(
+      `INSERT INTO auth_sessions 
+        (session_id, user_id, token_hash, expires_at, ip_address, user_agent) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        session_id,
+        user.user_id,
+        token_hash,
+        expires_at,
+        req.ip,
+        req.headers["user-agent"] || 'unknown',
+      ]
+    );
+
+    // Update last_login and reset failed attempts
+    await db.query(
+      "UPDATE users SET last_login = NOW(), failed_login_attempts = 0 WHERE user_id = ?", 
+      [user.user_id]
+    );
+
+    // Get patient data if role is patient
+    let patientData = null;
+    if (user.role === 'patient') {
+      const [patients] = await db.query(
+        "SELECT * FROM patients WHERE created_by = ?",
+        [user.user_id]
+      );
+      patientData = patients[0] || null;
+    }
+
+    // Log successful login with MFA
+    await logAudit({
+      user_id: user.user_id,
+      user_name: user.full_name || user.username,
+      user_role: user.role,
+      action: 'LOGIN',
+      module: 'Authentication',
+      entity_type: 'user',
+      entity_id: user.user_id,
+      record_id: user.user_id,
+      change_summary: `Successful login with MFA: ${user.username}`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: "Login successful with MFA",
+      token,
+      user: {
+        user_id: user.user_id,
+        username: user.username,
+        full_name: user.full_name,
+        email: user.email,
+        role: user.role,
+        facility_id: user.facility_id,
+        patient: patientData
+      },
+    });
+  } catch (error) {
+    console.error("Complete login error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error during login completion",
+      error: error.message,
+    });
   }
 });
 

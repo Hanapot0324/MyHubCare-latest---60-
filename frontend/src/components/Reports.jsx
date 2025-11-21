@@ -32,32 +32,18 @@ const Reports = ({ socket }) => {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
 
-  // Sample data for charts (in production, this would come from API)
-  const patientDemographicsData = [
-    { name: 'Male', value: 66.7, color: '#1976d2' },
-    { name: 'Female', value: 33.3, color: '#ec407a' },
-  ];
-
-  const adherenceTrendsData = [
-    { name: 'Jan', value: 20 },
-    { name: 'Feb', value: 25 },
-    { name: 'Mar', value: 30 },
-    { name: 'Apr', value: 28 },
-    { name: 'May', value: 85 },
-  ];
-
-  const inventoryLevelsData = [
-    { name: 'Tenofovir/Lamivudine', value: 500 },
-    { name: 'Efavirenz 600mg', value: 250 },
-    { name: 'Atazanavir 300mg', value: 80 },
-    { name: 'Lopinavir 100mg', value: 150 },
-    { name: 'Dolutegravir', value: 750 },
-  ];
-
-  const appointmentAttendanceData = [
-    { name: 'Completed', value: 33.3, color: '#4caf50' },
-    { name: 'Scheduled', value: 66.7, color: '#1976d2' },
-  ];
+  // Dashboard statistics state
+  const [dashboardStats, setDashboardStats] = useState(null);
+  const [patientDemographicsData, setPatientDemographicsData] = useState([
+    { name: 'Male', value: 0, color: '#1976d2' },
+    { name: 'Female', value: 0, color: '#ec407a' },
+  ]);
+  const [adherenceTrendsData, setAdherenceTrendsData] = useState([]);
+  const [inventoryLevelsData, setInventoryLevelsData] = useState([]);
+  const [appointmentAttendanceData, setAppointmentAttendanceData] = useState([
+    { name: 'Completed', value: 0, color: '#4caf50' },
+    { name: 'Scheduled', value: 0, color: '#1976d2' },
+  ]);
 
   // Get auth token
   const getAuthToken = () => {
@@ -97,9 +83,170 @@ const Reports = ({ socket }) => {
     }
   };
 
+  // Fetch dashboard statistics
+  const fetchDashboardStats = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/reports/dashboard/stats`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.stats) {
+          setDashboardStats(data.stats);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching dashboard stats:', error);
+    }
+  };
+
+  // Fetch patient demographics
+  const fetchPatientDemographics = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/patients`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.patients) {
+          const patients = data.patients;
+          // Database uses 'sex' column with values 'M', 'F', 'O'
+          const maleCount = patients.filter(p => 
+            p.sex === 'M' || p.sex === 'male' || p.sex === 'Male'
+          ).length;
+          const femaleCount = patients.filter(p => 
+            p.sex === 'F' || p.sex === 'female' || p.sex === 'Female'
+          ).length;
+          const total = patients.length;
+          
+          if (total > 0) {
+            setPatientDemographicsData([
+              { name: 'Male', value: Math.round((maleCount / total) * 100), color: '#1976d2' },
+              { name: 'Female', value: Math.round((femaleCount / total) * 100), color: '#ec407a' },
+            ]);
+          } else {
+            // Reset to zero if no patients
+            setPatientDemographicsData([
+              { name: 'Male', value: 0, color: '#1976d2' },
+              { name: 'Female', value: 0, color: '#ec407a' },
+            ]);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching patient demographics:', error);
+    }
+  };
+
+  // Fetch adherence trends data
+  const fetchAdherenceTrends = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/reports/charts/adherence-trends?months=6`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data) {
+          setAdherenceTrendsData(data.data);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching adherence trends:', error);
+      // Set empty array on error
+      setAdherenceTrendsData([]);
+    }
+  };
+
+  // Fetch inventory levels data
+  const fetchInventoryLevels = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/reports/charts/inventory-levels?limit=10`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data) {
+          setInventoryLevelsData(data.data);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching inventory levels:', error);
+      // Set empty array on error
+      setInventoryLevelsData([]);
+    }
+  };
+
+  // Fetch appointment attendance data
+  const fetchAppointmentAttendance = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/reports/charts/appointment-attendance`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data) {
+          // Format for pie chart
+          const formattedData = data.data.map(item => ({
+            name: item.name,
+            value: item.percentage || item.value,
+            color: item.color,
+          }));
+          setAppointmentAttendanceData(formattedData);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching appointment attendance:', error);
+      // Reset to default on error
+      setAppointmentAttendanceData([
+        { name: 'Completed', value: 0, color: '#4caf50' },
+        { name: 'Scheduled', value: 0, color: '#1976d2' },
+      ]);
+    }
+  };
+
   useEffect(() => {
     getCurrentUser();
   }, []);
+
+  useEffect(() => {
+    if (userRole && ['admin', 'physician'].includes(userRole)) {
+      fetchDashboardStats();
+      fetchPatientDemographics();
+      fetchAdherenceTrends();
+      fetchInventoryLevels();
+      fetchAppointmentAttendance();
+    }
+  }, [userRole]);
 
   // Auto-hide toast
   useEffect(() => {
@@ -138,12 +285,83 @@ const Reports = ({ socket }) => {
   }
 
   // Handle report generation
-  const handleGenerateReport = (reportType) => {
-    setToast({
-      message: `${reportType} report generation started...`,
-      type: 'success',
-    });
-    // In production, this would trigger actual report generation
+  const handleGenerateReport = async (reportType) => {
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        setToast({
+          message: 'Authentication required',
+          type: 'error',
+        });
+        return;
+      }
+
+      // Map report type to backend format
+      const reportTypeMap = {
+        'Patient Statistics': 'patient',
+        'Adherence': 'adherence',
+        'Inventory': 'inventory',
+        'Appointment': 'appointment',
+      };
+
+      const backendReportType = reportTypeMap[reportType] || reportType.toLowerCase();
+
+      setToast({
+        message: `Generating ${reportType} report...`,
+        type: 'success',
+      });
+
+      const response = await fetch(`${API_BASE_URL}/reports/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          report_type: backendReportType,
+          // Optional: Add facility_id, date_from, date_to if needed
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setToast({
+          message: `${reportType} report generated successfully! Run ID: ${data.run.run_id.substring(0, 8)}...`,
+          type: 'success',
+        });
+        
+        // Refresh all charts after report generation
+        if (userRole && ['admin', 'physician'].includes(userRole)) {
+          fetchDashboardStats();
+          
+          // Refresh relevant charts based on report type
+          if (reportType === 'Patient Statistics' || backendReportType === 'patient') {
+            fetchPatientDemographics();
+          }
+          if (reportType === 'Adherence' || backendReportType === 'adherence') {
+            fetchAdherenceTrends();
+          }
+          if (reportType === 'Inventory' || backendReportType === 'inventory') {
+            fetchInventoryLevels();
+          }
+          if (reportType === 'Appointment' || backendReportType === 'appointment') {
+            fetchAppointmentAttendance();
+          }
+        }
+      } else {
+        setToast({
+          message: data.message || `Failed to generate ${reportType} report`,
+          type: 'error',
+        });
+      }
+    } catch (error) {
+      console.error('Error generating report:', error);
+      setToast({
+        message: `Error generating ${reportType} report: ${error.message}`,
+        type: 'error',
+      });
+    }
   };
 
   return (
@@ -256,23 +474,31 @@ const Reports = ({ socket }) => {
                 Adherence Trends
               </Typography>
               <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={adherenceTrendsData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                  <XAxis dataKey="name" stroke="#666" />
-                  <YAxis
-                        domain={[0, 100]}
-                        stroke="#666"
-                        label={{ value: 'Adherence Rate (%)', angle: -90, position: 'insideLeft' }}
-                  />
-                  <Tooltip />
-                  <Line
-                        type="monotone"
-                        dataKey="value"
-                        stroke="#4caf50"
-                        strokeWidth={2}
-                        dot={{ fill: '#4caf50', r: 4 }}
-                  />
-                </LineChart>
+                {adherenceTrendsData.length > 0 ? (
+                  <LineChart data={adherenceTrendsData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                    <XAxis dataKey="name" stroke="#666" />
+                    <YAxis
+                      domain={[0, 100]}
+                      stroke="#666"
+                      label={{ value: 'Adherence Rate (%)', angle: -90, position: 'insideLeft' }}
+                    />
+                    <Tooltip />
+                    <Line
+                      type="monotone"
+                      dataKey="value"
+                      stroke="#4caf50"
+                      strokeWidth={2}
+                      dot={{ fill: '#4caf50', r: 4 }}
+                    />
+                  </LineChart>
+                ) : (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      No adherence data available
+                    </Typography>
+                  </Box>
+                )}
               </ResponsiveContainer>
             </CardContent>
           </Card>
@@ -305,24 +531,31 @@ const Reports = ({ socket }) => {
                 Inventory Levels
               </Typography>
               <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={inventoryLevelsData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                  <XAxis
-                        dataKey="name"
-                        stroke="#666"
-                        angle={-45}
-                        textAnchor="end"
-                        height={80}
-                        fontSize={10}
-                  />
-                  <YAxis
-                        domain={[0, 800]}
-                        stroke="#666"
-                        label={{ value: 'Stock Levels', angle: 90, position: 'insideLeft' }}
-                  />
-                  <Tooltip />
-                  <Bar dataKey="value" fill="#ff9800" />
-                </BarChart>
+                {inventoryLevelsData.length > 0 ? (
+                  <BarChart data={inventoryLevelsData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                    <XAxis
+                      dataKey="name"
+                      stroke="#666"
+                      angle={-45}
+                      textAnchor="end"
+                      height={80}
+                      fontSize={10}
+                    />
+                    <YAxis
+                      stroke="#666"
+                      label={{ value: 'Stock Levels', angle: 90, position: 'insideLeft' }}
+                    />
+                    <Tooltip />
+                    <Bar dataKey="value" fill="#ff9800" />
+                  </BarChart>
+                ) : (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      No inventory data available
+                    </Typography>
+                  </Box>
+                )}
               </ResponsiveContainer>
             </CardContent>
           </Card>
@@ -355,23 +588,31 @@ const Reports = ({ socket }) => {
                 Appointment Attendance
               </Typography>
               <ResponsiveContainer width="100%" height={220}>
-                <PieChart>
-                  <Pie
-                        data={appointmentAttendanceData}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        label={({ name, value }) => `${name} (${value}%)`}
-                        outerRadius={75}
-                        fill="#8884d8"
-                        dataKey="value"
-                  >
-                        {appointmentAttendanceData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
+                {appointmentAttendanceData.length > 0 ? (
+                  <PieChart>
+                    <Pie
+                      data={appointmentAttendanceData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, value }) => `${name} (${value}%)`}
+                      outerRadius={75}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {appointmentAttendanceData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                ) : (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      No appointment data available
+                    </Typography>
+                  </Box>
+                )}
               </ResponsiveContainer>
               <Typography
                 variant="body2"

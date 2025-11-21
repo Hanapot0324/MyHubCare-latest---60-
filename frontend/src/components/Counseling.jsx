@@ -50,6 +50,7 @@ const Counseling = () => {
     session_notes: '',
     follow_up_required: false,
     follow_up_date: '',
+    follow_up_reason: '',
   });
 
   // Get auth token
@@ -360,6 +361,7 @@ const Counseling = () => {
           session_notes: JSON.stringify(notesData),
           follow_up_required: newSession.follow_up_required || false,
           follow_up_date: newSession.follow_up_required && newSession.follow_up_date ? newSession.follow_up_date : null,
+          follow_up_reason: newSession.follow_up_required && newSession.follow_up_reason ? newSession.follow_up_reason : null,
           counselor_id: newSession.counselor_id || null, // Use selected counselor or current user
         }),
       });
@@ -380,6 +382,7 @@ const Counseling = () => {
             session_notes: '',
             follow_up_required: false,
             follow_up_date: '',
+            follow_up_reason: '',
           });
           setShowModal(false);
           alert('Counseling session recorded successfully');
@@ -410,6 +413,7 @@ const Counseling = () => {
       session_notes: '',
       follow_up_required: false,
       follow_up_date: '',
+      follow_up_reason: '',
     });
     setShowModal(false);
   };
@@ -640,13 +644,18 @@ const Counseling = () => {
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 1000,
+      padding: '20px',
     },
     modalContent: {
       backgroundColor: 'white',
       borderRadius: '8px',
       width: '90%',
       maxWidth: '600px',
+      maxHeight: '90vh',
       boxShadow: '0 4px 15px rgba(0, 0, 0, 0.2)',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
     },
     modalHeader: {
       padding: '20px 25px',
@@ -654,12 +663,18 @@ const Counseling = () => {
       backgroundColor: '#f8f9fa',
       borderTopLeftRadius: '8px',
       borderTopRightRadius: '8px',
+      flexShrink: 0,
     },
     modalTitle: {
       margin: 0,
       color: '#333',
       fontSize: '20px',
       fontWeight: '600',
+    },
+    modalBody: {
+      overflowY: 'auto',
+      flex: 1,
+      minHeight: 0,
     },
     form: {
       padding: '25px',
@@ -727,7 +742,12 @@ const Counseling = () => {
       justifyContent: 'flex-end',
       marginTop: '25px',
       paddingTop: '20px',
+      paddingBottom: '20px',
+      paddingLeft: '25px',
+      paddingRight: '25px',
       borderTop: '1px solid #dee2e6',
+      backgroundColor: 'white',
+      flexShrink: 0,
     },
     cancelButton: {
       padding: '10px 20px',
@@ -943,7 +963,8 @@ const Counseling = () => {
             <div style={styles.modalHeader}>
               <h2 style={styles.modalTitle}>Record Counseling Session</h2>
             </div>
-            <form style={styles.form} onSubmit={handleSubmit}>
+            <div style={styles.modalBody}>
+              <form id="counseling-form" style={styles.form} onSubmit={handleSubmit}>
               <div style={styles.formGroup}>
                 <label style={styles.label} htmlFor="patient_id">
                   Patient <span style={{ color: 'red' }}>*</span>
@@ -1113,33 +1134,50 @@ const Counseling = () => {
                 </label>
               </div>
               {newSession.follow_up_required && (
-                <div style={styles.formGroup}>
-                  <label style={styles.label} htmlFor="follow_up_date">
-                    Follow-up Date
-                  </label>
-                  <input
-                    type="date"
-                    id="follow_up_date"
-                    name="follow_up_date"
-                    value={newSession.follow_up_date}
-                    onChange={handleInputChange}
-                    style={styles.input}
-                  />
-                </div>
+                <>
+                  <div style={styles.formGroup}>
+                    <label style={styles.label} htmlFor="follow_up_date">
+                      Follow-up Date
+                    </label>
+                    <input
+                      type="date"
+                      id="follow_up_date"
+                      name="follow_up_date"
+                      value={newSession.follow_up_date}
+                      onChange={handleInputChange}
+                      style={styles.input}
+                    />
+                  </div>
+                  <div style={styles.formGroup}>
+                    <label style={styles.label} htmlFor="follow_up_reason">
+                      Follow-up Reason
+                    </label>
+                    <textarea
+                      id="follow_up_reason"
+                      name="follow_up_reason"
+                      value={newSession.follow_up_reason}
+                      onChange={handleInputChange}
+                      style={styles.textarea}
+                      rows="3"
+                      placeholder="Enter reason for follow-up..."
+                    />
+                  </div>
+                </>
               )}
-              <div style={styles.modalActions}>
-                <button
-                  type="button"
-                  style={styles.cancelButton}
-                  onClick={handleCancel}
-                >
-                  Cancel
-                </button>
-                <button type="submit" style={styles.submitButton}>
-                  Save Session
-                </button>
-              </div>
-            </form>
+              </form>
+            </div>
+            <div style={styles.modalActions}>
+              <button
+                type="button"
+                style={styles.cancelButton}
+                onClick={handleCancel}
+              >
+                Cancel
+              </button>
+              <button type="submit" form="counseling-form" style={styles.submitButton}>
+                Save Session
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1151,7 +1189,8 @@ const Counseling = () => {
             <div style={styles.modalHeader}>
               <h2 style={styles.modalTitle}>Counseling Session Details</h2>
             </div>
-            <div style={styles.form}>
+            <div style={styles.modalBody}>
+              <div style={styles.form}>
               {/* Details content remains the same */}
               <div style={styles.formGroup}>
                 <label style={styles.label}>Patient Name</label>
@@ -1254,15 +1293,16 @@ const Counseling = () => {
                   )}
                 </div>
               )}
-              <div style={styles.modalActions}>
-                <button
-                  type="button"
-                  style={styles.cancelButton}
-                  onClick={() => setShowDetailsModal(false)}
-                >
-                  Close
-                </button>
               </div>
+            </div>
+            <div style={styles.modalActions}>
+              <button
+                type="button"
+                style={styles.cancelButton}
+                onClick={() => setShowDetailsModal(false)}
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

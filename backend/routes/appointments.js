@@ -4,6 +4,7 @@ import { db } from '../db.js';
 import { authenticateToken } from './auth.js';
 import { logAudit, getUserInfoForAudit, getClientIp } from '../utils/auditLogger.js';
 import { notifyAppointmentCreated } from './notifications.js';
+import { calculateARPARiskScore } from '../services/arpaService.js';
 
 const router = express.Router();
 
@@ -910,6 +911,19 @@ router.put('/:id', authenticateToken, async (req, res) => {
       WHERE appointment_id = ?
     `, params);
 
+    // Auto-calculate ARPA risk score if appointment status changed (completed, no_show, cancelled)
+    try {
+      const statusChanged = req.body.status && oldData.status !== req.body.status;
+      const statusAffectsRisk = ['completed', 'no_show', 'cancelled'].includes(req.body.status);
+      
+      if (statusChanged && statusAffectsRisk && oldData.patient_id && req.user?.user_id) {
+        await calculateARPARiskScore(oldData.patient_id, req.user.user_id, { skipAudit: false });
+      }
+    } catch (arpaError) {
+      console.error('ARPA auto-calculation error after appointment update:', arpaError);
+      // Don't fail the request if ARPA calculation fails
+    }
+
     // Log audit
     const userInfo = await getUserInfoForAudit(req.user.user_id);
     const newData = { ...oldData, ...req.body };
@@ -1006,6 +1020,16 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       cancellation_reason || null,
       id
     ]);
+
+    // Auto-calculate ARPA risk score after appointment cancellation
+    try {
+      if (existing[0].patient_id && req.user?.user_id) {
+        await calculateARPARiskScore(existing[0].patient_id, req.user.user_id, { skipAudit: false });
+      }
+    } catch (arpaError) {
+      console.error('ARPA auto-calculation error after appointment cancellation:', arpaError);
+      // Don't fail the request if ARPA calculation fails
+    }
 
     // Log audit
     const userInfo = await getUserInfoForAudit(req.user.user_id);
@@ -1466,6 +1490,445 @@ router.get('/availability/slots', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch availability slots',
+      error: error.message
+    });
+  }
+});
+
+// POST /api/appointments/availability/slots - Create availability slots
+router.post('/availability/slots', authenticateToken, async (req, res) => {
+  try {
+    // Check permissions - only admins, physicians, and case managers can manage slots
+    if (!['admin', 'physician', 'case_manager'].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only administrators, physicians, and case managers can manage availability slots.',
+      });
+    }
+
+    const {
+      provider_id,
+      facility_id,
+      slot_date,
+      start_time,
+      end_time,
+      slot_status = 'available'
+    } = req.body;
+
+    // Validation
+    if (!provider_id || !facility_id || !slot_date || !start_time || !end_time) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields: provider_id, facility_id, slot_date, start_time, end_time'
+      });
+    }
+
+    // Validate slot_status
+    const validStatuses = ['available', 'booked', 'blocked', 'unavailable'];
+    if (!validStatuses.includes(slot_status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid slot_status. Must be one of: ${validStatuses.join(', ')}`
+      });
+    }
+
+    // Check if provider exists
+    const [providers] = await db.query('SELECT user_id FROM users WHERE user_id = ?', [provider_id]);
+    if (providers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Provider not found'
+      });
+    }
+
+    // Check if facility exists
+    const [facilities] = await db.query('SELECT facility_id FROM facilities WHERE facility_id = ?', [facility_id]);
+    if (facilities.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Facility not found'
+      });
+    }
+
+    const slot_id = uuidv4();
+
+    await db.query(`
+      INSERT INTO availability_slots (
+        slot_id, provider_id, facility_id, slot_date, start_time, end_time, slot_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [slot_id, provider_id, facility_id, slot_date, start_time, end_time, slot_status]);
+
+    // Fetch created slot
+    const [created] = await db.query(`
+      SELECT 
+        s.*,
+        u.full_name AS provider_name,
+        f.facility_name
+      FROM availability_slots s
+      LEFT JOIN users u ON s.provider_id = u.user_id
+      LEFT JOIN facilities f ON s.facility_id = f.facility_id
+      WHERE s.slot_id = ?
+    `, [slot_id]);
+
+    // Log audit
+    const userInfo = await getUserInfoForAudit(req.user.user_id);
+    await logAudit({
+      action: 'CREATE',
+      table_name: 'availability_slots',
+      record_id: slot_id,
+      user_id: req.user.user_id,
+      user_name: userInfo?.username || 'Unknown',
+      ip_address: getClientIp(req),
+      changes: JSON.stringify(created[0])
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Availability slot created successfully',
+      data: created[0]
+    });
+  } catch (error) {
+    console.error('Error creating availability slot:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create availability slot',
+      error: error.message
+    });
+  }
+});
+
+// PUT /api/appointments/availability/slots/:id - Update availability slot
+router.put('/availability/slots/:id', authenticateToken, async (req, res) => {
+  try {
+    // Check permissions
+    if (!['admin', 'physician', 'case_manager'].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only administrators, physicians, and case managers can manage availability slots.',
+      });
+    }
+
+    const { id } = req.params;
+    const {
+      slot_date,
+      start_time,
+      end_time,
+      slot_status
+    } = req.body;
+
+    // Check if slot exists
+    const [existing] = await db.query('SELECT * FROM availability_slots WHERE slot_id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Availability slot not found'
+      });
+    }
+
+    const oldData = existing[0];
+
+    // Validate slot_status if provided
+    if (slot_status) {
+      const validStatuses = ['available', 'booked', 'blocked', 'unavailable'];
+      if (!validStatuses.includes(slot_status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid slot_status. Must be one of: ${validStatuses.join(', ')}`
+        });
+      }
+    }
+
+    // Build update query
+    const updates = [];
+    const params = [];
+
+    if (slot_date !== undefined) {
+      updates.push('slot_date = ?');
+      params.push(slot_date);
+    }
+    if (start_time !== undefined) {
+      updates.push('start_time = ?');
+      params.push(start_time);
+    }
+    if (end_time !== undefined) {
+      updates.push('end_time = ?');
+      params.push(end_time);
+    }
+    if (slot_status !== undefined) {
+      updates.push('slot_status = ?');
+      params.push(slot_status);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No fields to update'
+      });
+    }
+
+    params.push(id);
+
+    await db.query(`
+      UPDATE availability_slots 
+      SET ${updates.join(', ')}
+      WHERE slot_id = ?
+    `, params);
+
+    // Fetch updated slot
+    const [updated] = await db.query(`
+      SELECT 
+        s.*,
+        u.full_name AS provider_name,
+        f.facility_name
+      FROM availability_slots s
+      LEFT JOIN users u ON s.provider_id = u.user_id
+      LEFT JOIN facilities f ON s.facility_id = f.facility_id
+      WHERE s.slot_id = ?
+    `, [id]);
+
+    // Log audit
+    const userInfo = await getUserInfoForAudit(req.user.user_id);
+    await logAudit({
+      action: 'UPDATE',
+      table_name: 'availability_slots',
+      record_id: id,
+      user_id: req.user.user_id,
+      user_name: userInfo?.username || 'Unknown',
+      ip_address: getClientIp(req),
+      changes: JSON.stringify({ old: oldData, new: updated[0] })
+    });
+
+    res.json({
+      success: true,
+      message: 'Availability slot updated successfully',
+      data: updated[0]
+    });
+  } catch (error) {
+    console.error('Error updating availability slot:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update availability slot',
+      error: error.message
+    });
+  }
+});
+
+// DELETE /api/appointments/availability/slots/:id - Delete/block availability slot
+router.delete('/availability/slots/:id', authenticateToken, async (req, res) => {
+  try {
+    // Check permissions
+    if (!['admin', 'physician', 'case_manager'].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only administrators, physicians, and case managers can manage availability slots.',
+      });
+    }
+
+    const { id } = req.params;
+
+    // Check if slot exists
+    const [existing] = await db.query('SELECT * FROM availability_slots WHERE slot_id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Availability slot not found'
+      });
+    }
+
+    const slot = existing[0];
+
+    // If slot is booked, don't allow deletion - only allow blocking
+    if (slot.slot_status === 'booked' && slot.appointment_id) {
+      // Update to blocked instead of deleting
+      await db.query(`
+        UPDATE availability_slots 
+        SET slot_status = 'blocked'
+        WHERE slot_id = ?
+      `, [id]);
+
+      // Log audit
+      const userInfo = await getUserInfoForAudit(req.user.user_id);
+      await logAudit({
+        action: 'UPDATE',
+        table_name: 'availability_slots',
+        record_id: id,
+        user_id: req.user.user_id,
+        user_name: userInfo?.username || 'Unknown',
+        ip_address: getClientIp(req),
+        changes: JSON.stringify({ action: 'blocked', reason: 'Slot has booked appointment' })
+      });
+
+      return res.json({
+        success: true,
+        message: 'Availability slot blocked successfully (cannot delete booked slot)'
+      });
+    }
+
+    // Delete the slot
+    await db.query('DELETE FROM availability_slots WHERE slot_id = ?', [id]);
+
+    // Log audit
+    const userInfo = await getUserInfoForAudit(req.user.user_id);
+    await logAudit({
+      action: 'DELETE',
+      table_name: 'availability_slots',
+      record_id: id,
+      user_id: req.user.user_id,
+      user_name: userInfo?.username || 'Unknown',
+      ip_address: getClientIp(req),
+      changes: JSON.stringify(slot)
+    });
+
+    res.json({
+      success: true,
+      message: 'Availability slot deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting availability slot:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete availability slot',
+      error: error.message
+    });
+  }
+});
+
+// GET /api/appointments/:id/reminders - Get reminders for appointment
+router.get('/:id/reminders', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if appointment exists
+    const [appointments] = await db.query('SELECT appointment_id FROM appointments WHERE appointment_id = ?', [id]);
+    if (appointments.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Appointment not found'
+      });
+    }
+
+    const [reminders] = await db.query(`
+      SELECT 
+        ar.*,
+        a.scheduled_start,
+        a.appointment_type
+      FROM appointment_reminders ar
+      LEFT JOIN appointments a ON ar.appointment_id = a.appointment_id
+      WHERE ar.appointment_id = ?
+      ORDER BY ar.reminder_scheduled_at ASC
+    `, [id]);
+
+    res.json({
+      success: true,
+      data: reminders
+    });
+  } catch (error) {
+    console.error('Error fetching appointment reminders:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch appointment reminders',
+      error: error.message
+    });
+  }
+});
+
+// PUT /api/appointments/reminders/:id - Update reminder status
+router.put('/reminders/:id', authenticateToken, async (req, res) => {
+  try {
+    // Check permissions - only admins can manually update reminders
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only administrators can update reminder status.',
+      });
+    }
+
+    const { id } = req.params;
+    const { status, reminder_sent_at } = req.body;
+
+    // Check if reminder exists
+    const [existing] = await db.query('SELECT * FROM appointment_reminders WHERE reminder_id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Reminder not found'
+      });
+    }
+
+    const oldData = existing[0];
+
+    // Validate status if provided
+    if (status) {
+      const validStatuses = ['pending', 'sent', 'failed', 'cancelled'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`
+        });
+      }
+    }
+
+    // Build update query
+    const updates = [];
+    const params = [];
+
+    if (status !== undefined) {
+      updates.push('status = ?');
+      params.push(status);
+    }
+    if (reminder_sent_at !== undefined) {
+      updates.push('reminder_sent_at = ?');
+      params.push(reminder_sent_at);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No fields to update'
+      });
+    }
+
+    params.push(id);
+
+    await db.query(`
+      UPDATE appointment_reminders 
+      SET ${updates.join(', ')}
+      WHERE reminder_id = ?
+    `, params);
+
+    // Fetch updated reminder
+    const [updated] = await db.query(`
+      SELECT 
+        ar.*,
+        a.scheduled_start,
+        a.appointment_type
+      FROM appointment_reminders ar
+      LEFT JOIN appointments a ON ar.appointment_id = a.appointment_id
+      WHERE ar.reminder_id = ?
+    `, [id]);
+
+    // Log audit
+    const userInfo = await getUserInfoForAudit(req.user.user_id);
+    await logAudit({
+      action: 'UPDATE',
+      table_name: 'appointment_reminders',
+      record_id: id,
+      user_id: req.user.user_id,
+      user_name: userInfo?.username || 'Unknown',
+      ip_address: getClientIp(req),
+      changes: JSON.stringify({ old: oldData, new: updated[0] })
+    });
+
+    res.json({
+      success: true,
+      message: 'Reminder updated successfully',
+      data: updated[0]
+    });
+  } catch (error) {
+    console.error('Error updating reminder:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update reminder',
       error: error.message
     });
   }

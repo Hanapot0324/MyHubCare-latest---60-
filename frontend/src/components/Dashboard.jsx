@@ -61,52 +61,17 @@ const Dashboard = ({ socket }) => {
 
   // Admin/Staff data
   const [stats, setStats] = useState({
-    totalPatients: 3,
+    totalPatients: 0,
     todayAppointments: 0,
-    lowStockAlerts: 1,
+    lowStockAlerts: 0,
     monthlyPrescriptions: 0,
   });
 
-  const [patientRegistrationData, setPatientRegistrationData] = useState([
-    { name: 'Jun', patients: 0 },
-    { name: 'Jul', patients: 0 },
-    { name: 'Aug', patients: 0 },
-    { name: 'Sep', patients: 0 },
-    { name: 'Oct', patients: 0 },
-    { name: 'Nov', patients: 3 },
-  ]);
-
-  const [monthlyAppointmentsData, setMonthlyAppointmentsData] = useState([
-    { name: 'Jun', appointments: 0 },
-    { name: 'Jul', appointments: 0 },
-    { name: 'Aug', appointments: 0 },
-    { name: 'Sep', appointments: 0 },
-    { name: 'Oct', appointments: 0 },
-    { name: 'Nov', appointments: 3 },
-  ]);
-
-  const [riskDistributionData, setRiskDistributionData] = useState([
-    { name: 'Low', value: 33.3, color: '#4caf50' },
-    { name: 'Medium', value: 16.7, color: '#ff9800' },
-    { name: 'High', value: 33.3, color: '#f44336' },
-    { name: 'Critical', value: 16.7, color: '#8b0000' },
-  ]);
-
-  const [monthlyPrescriptionsData, setMonthlyPrescriptionsData] = useState([
-    { name: 'Jun', prescriptions: 0 },
-    { name: 'Jul', prescriptions: 0 },
-    { name: 'Aug', prescriptions: 0 },
-    { name: 'Sep', prescriptions: 0 },
-    { name: 'Oct', prescriptions: 2 },
-    { name: 'Nov', prescriptions: 0 },
-  ]);
-
-  const [recentActivity, setRecentActivity] = useState([
-    { type: 'Follow-up', patient: 'John Doe', date: '10/15/2025', time: '8:00:00 AM', icon: 'calendar', color: '#9c27b0' },
-    { type: 'Prescription', patient: 'John Doe', date: '10/15/2025', time: '8:00:00 AM', icon: 'medication', color: '#ec407a' },
-    { type: 'Follow-up', patient: 'Maria Santos', date: '10/10/2025', time: '8:00:00 AM', icon: 'calendar', color: '#9c27b0' },
-    { type: 'Prescription', patient: 'Maria Santos', date: '10/10/2025', time: '8:00:00 AM', icon: 'medication', color: '#ec407a' },
-  ]);
+  const [patientRegistrationData, setPatientRegistrationData] = useState([]);
+  const [monthlyAppointmentsData, setMonthlyAppointmentsData] = useState([]);
+  const [riskDistributionData, setRiskDistributionData] = useState([]);
+  const [monthlyPrescriptionsData, setMonthlyPrescriptionsData] = useState([]);
+  const [recentActivity, setRecentActivity] = useState([]);
 
   const [alerts, setAlerts] = useState([]);
 
@@ -121,8 +86,103 @@ const Dashboard = ({ socket }) => {
   useEffect(() => {
     if (userRole === 'patient' && currentUser) {
       fetchPatientData();
+    } else if (userRole && ['admin', 'physician', 'nurse', 'case_manager'].includes(userRole)) {
+      fetchDashboardData();
     }
   }, [userRole, currentUser]);
+
+  const fetchDashboardData = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      // Fetch all dashboard data in parallel
+      const [
+        overviewResponse,
+        patientRegResponse,
+        appointmentsResponse,
+        prescriptionsResponse,
+        riskResponse,
+        activityResponse,
+      ] = await Promise.all([
+        fetch(`${API_BASE_URL}/reports/dashboard/overview`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE_URL}/reports/dashboard/patient-registration-trends?months=6`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE_URL}/reports/dashboard/monthly-appointments?months=6`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE_URL}/reports/dashboard/monthly-prescriptions?months=6`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE_URL}/reports/dashboard/risk-distribution`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE_URL}/reports/dashboard/recent-activity?limit=10`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+
+      // Process overview stats
+      if (overviewResponse.ok) {
+        const overviewData = await overviewResponse.json();
+        if (overviewData.success && overviewData.stats) {
+          setStats(overviewData.stats);
+        }
+      }
+
+      // Process patient registration trends
+      if (patientRegResponse.ok) {
+        const regData = await patientRegResponse.json();
+        if (regData.success && regData.data) {
+          setPatientRegistrationData(regData.data);
+        }
+      }
+
+      // Process monthly appointments
+      if (appointmentsResponse.ok) {
+        const aptData = await appointmentsResponse.json();
+        if (aptData.success && aptData.data) {
+          setMonthlyAppointmentsData(aptData.data);
+        }
+      }
+
+      // Process monthly prescriptions
+      if (prescriptionsResponse.ok) {
+        const presData = await prescriptionsResponse.json();
+        if (presData.success && presData.data) {
+          setMonthlyPrescriptionsData(presData.data);
+        }
+      }
+
+      // Process risk distribution
+      if (riskResponse.ok) {
+        const riskData = await riskResponse.json();
+        if (riskData.success && riskData.data) {
+          // Calculate percentages if total is provided
+          const total = riskData.total || riskData.data.reduce((sum, item) => sum + item.value, 0);
+          const formattedData = riskData.data.map(item => ({
+            ...item,
+            value: total > 0 ? (item.value / total) * 100 : 0,
+            count: item.value, // Store original count
+          }));
+          setRiskDistributionData(formattedData);
+        }
+      }
+
+      // Process recent activity
+      if (activityResponse.ok) {
+        const activityData = await activityResponse.json();
+        if (activityData.success && activityData.data) {
+          setRecentActivity(activityData.data);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    }
+  };
 
   useEffect(() => {
     // Simulate receiving real-time alerts
@@ -760,19 +820,27 @@ const Dashboard = ({ socket }) => {
               Last 6 Months
             </Typography>
             <ResponsiveContainer width="100%" height="85%">
-              <AreaChart data={patientRegistrationData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                <XAxis dataKey="name" stroke="#666" />
-                <YAxis domain={[0, 3]} stroke="#666" />
-                <Tooltip />
-                <Area
-                  type="monotone"
-                  dataKey="patients"
-                  stroke="#1976d2"
-                  fill="#1976d2"
-                  fillOpacity={0.3}
-                />
-              </AreaChart>
+              {patientRegistrationData.length > 0 ? (
+                <AreaChart data={patientRegistrationData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                  <XAxis dataKey="name" stroke="#666" />
+                  <YAxis stroke="#666" />
+                  <Tooltip />
+                  <Area
+                    type="monotone"
+                    dataKey="patients"
+                    stroke="#1976d2"
+                    fill="#1976d2"
+                    fillOpacity={0.3}
+                  />
+                </AreaChart>
+              ) : (
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    No patient registration data available
+                  </Typography>
+                </Box>
+              )}
             </ResponsiveContainer>
           </Paper>
         </Grid>
@@ -795,13 +863,21 @@ const Dashboard = ({ socket }) => {
               Last 6 Months
             </Typography>
             <ResponsiveContainer width="100%" height="85%">
-              <BarChart data={monthlyAppointmentsData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                <XAxis dataKey="name" stroke="#666" />
-                <YAxis domain={[0, 3]} stroke="#666" />
-                <Tooltip />
-                <Bar dataKey="appointments" fill="#4caf50" />
-              </BarChart>
+              {monthlyAppointmentsData.length > 0 ? (
+                <BarChart data={monthlyAppointmentsData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                  <XAxis dataKey="name" stroke="#666" />
+                  <YAxis stroke="#666" />
+                  <Tooltip />
+                  <Bar dataKey="appointments" fill="#4caf50" />
+                </BarChart>
+              ) : (
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    No appointment data available
+                  </Typography>
+                </Box>
+              )}
             </ResponsiveContainer>
           </Paper>
         </Grid>
@@ -821,37 +897,47 @@ const Dashboard = ({ socket }) => {
               Risk Distribution
             </Typography>
             <ResponsiveContainer width="100%" height="85%">
-              <PieChart>
-                <Pie
-                  data={riskDistributionData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }) =>
-                    `${name} (${(percent * 100).toFixed(1)}%)`
-                  }
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {riskDistributionData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
+              {riskDistributionData.length > 0 ? (
+                <PieChart>
+                  <Pie
+                    data={riskDistributionData}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={({ name, percent }) =>
+                      `${name} (${(percent * 100).toFixed(1)}%)`
+                    }
+                    outerRadius={80}
+                    fill="#8884d8"
+                    dataKey="value"
+                  >
+                    {riskDistributionData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              ) : (
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    No risk distribution data available
+                  </Typography>
+                </Box>
+              )}
             </ResponsiveContainer>
-            <Typography
-              variant="body2"
-              sx={{
-                textAlign: 'center',
-                mt: 1,
-                color: '#666',
-                fontWeight: 600,
-              }}
-            >
-              Total 6
-            </Typography>
+            {riskDistributionData.length > 0 && (
+              <Typography
+                variant="body2"
+                sx={{
+                  textAlign: 'center',
+                  mt: 1,
+                  color: '#666',
+                  fontWeight: 600,
+                }}
+              >
+                Total {stats.totalPatients || 0}
+              </Typography>
+            )}
           </Paper>
         </Grid>
 
@@ -873,19 +959,27 @@ const Dashboard = ({ socket }) => {
               Last 6 Months
             </Typography>
             <ResponsiveContainer width="100%" height="85%">
-              <AreaChart data={monthlyPrescriptionsData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                <XAxis dataKey="name" stroke="#666" />
-                <YAxis domain={[0, 2]} stroke="#666" />
-                <Tooltip />
-                <Area
-                  type="monotone"
-                  dataKey="prescriptions"
-                  stroke="#9c27b0"
-                  fill="#9c27b0"
-                  fillOpacity={0.3}
-                />
-              </AreaChart>
+              {monthlyPrescriptionsData.length > 0 ? (
+                <AreaChart data={monthlyPrescriptionsData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                  <XAxis dataKey="name" stroke="#666" />
+                  <YAxis stroke="#666" />
+                  <Tooltip />
+                  <Area
+                    type="monotone"
+                    dataKey="prescriptions"
+                    stroke="#9c27b0"
+                    fill="#9c27b0"
+                    fillOpacity={0.3}
+                  />
+                </AreaChart>
+              ) : (
+                <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                  <Typography variant="body2" color="text.secondary">
+                    No prescription data available
+                  </Typography>
+                </Box>
+              )}
             </ResponsiveContainer>
           </Paper>
         </Grid>
@@ -975,7 +1069,12 @@ const Dashboard = ({ socket }) => {
               Recent Activity
             </Typography>
             <Box>
-              {recentActivity.map((activity, index) => (
+              {recentActivity.length === 0 ? (
+                <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                  No recent activity
+                </Typography>
+              ) : (
+                recentActivity.map((activity, index) => (
                 <Box
                   key={index}
                   sx={{
@@ -1013,7 +1112,7 @@ const Dashboard = ({ socket }) => {
                     </Typography>
                   </Box>
                 </Box>
-              ))}
+              )))}
             </Box>
           </Paper>
         </Grid>

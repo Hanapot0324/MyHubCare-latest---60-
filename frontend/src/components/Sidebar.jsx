@@ -33,7 +33,9 @@ import {
   Assessment as AssessmentIcon,
   History as HistoryIcon,
   School as SchoolIcon,
+  
 } from '@mui/icons-material';
+import { PillIcon } from 'lucide-react';
 
 const drawerWidth = 240;
 
@@ -46,6 +48,7 @@ const allMenuItems = [
   { text: 'Profile', icon: <PersonIcon />, path: '/profile', roles: ['patient'] },
   { text: 'Clinical Visit', icon: <MedicalServicesIcon />, path: '/clinical-visit', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
   { text: 'Inventory', icon: <InventoryIcon />, path: '/inventory', roles: ['admin', 'nurse', 'lab_personnel'] },
+  { text: 'Medications', icon: <PillIcon />, path: '/medications', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
   { text: 'Prescriptions', icon: <DescriptionIcon />, path: '/prescriptions', roles: ['admin', 'physician', 'nurse', 'case_manager'] },
   { text: 'Medication Reminder', icon: <MedicationIcon />, path: '/medication-adherence', roles: ['admin', 'physician', 'nurse', 'case_manager', 'patient'] },
   { text: 'ART Regimens', icon: <MedicationIcon />, path: '/art-regimen', roles: ['admin', 'physician', 'nurse', 'case_manager'] },

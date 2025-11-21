@@ -179,9 +179,8 @@ const MedicationAdherence = () => {
       setLoading(true);
       const token = getAuthToken();
       
-      // Try to load reminders from prescriptions (reminders are created when medications are dispensed)
-      // We'll derive reminders from active prescriptions
-      const response = await fetch(`${API_BASE_URL}/prescriptions?patient_id=${patientId}&status=active`, {
+      // Load reminders from API endpoint
+      const response = await fetch(`${API_BASE_URL}/medication-adherence/reminders?patient_id=${patientId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -190,55 +189,19 @@ const MedicationAdherence = () => {
       if (response.ok) {
         const data = await response.json();
         if (data.success && data.data) {
-          // Build reminders from prescriptions
-          const remindersFromPrescriptions = [];
-          data.data.forEach(prescription => {
-            if (prescription.items && prescription.items.length > 0) {
-              prescription.items.forEach(item => {
-                remindersFromPrescriptions.push({
-                  reminder_id: `reminder-${prescription.prescription_id}-${item.prescription_item_id}`,
-                  prescription_id: prescription.prescription_id,
-                  patient_id: patientId,
-                  medication_name: item.medication_name,
-                  dosage: item.dosage,
-                  frequency: item.frequency,
-                  reminder_time: '09:00:00', // Default reminder time
-                  active: prescription.status === 'active',
-                  missed_doses: 0,
-                  browser_notifications: true,
-                });
-              });
-            }
-          });
-          
-          // Merge with localStorage reminders
-          const storedReminders = JSON.parse(localStorage.getItem('reminders')) || [];
-          const userReminders = storedReminders.filter(r => 
-            (r.patient_id || r.patientId) === patientId
-          );
-          
-          // Combine both sources, prioritizing localStorage reminders
-          const allReminders = [...remindersFromPrescriptions, ...userReminders];
-          setReminders(allReminders);
+          setReminders(data.data);
+        } else if (data.success && data.reminders) {
+          // Handle alias for compatibility
+          setReminders(data.reminders);
+        } else {
+          setReminders([]);
         }
       } else {
-        // Fallback to localStorage if API fails
-        const storedReminders = JSON.parse(localStorage.getItem('reminders')) || [];
-        const userReminders = storedReminders.filter(r => 
-          (r.patient_id || r.patientId) === patientId
-        );
-        setReminders(userReminders);
+        setReminders([]);
       }
     } catch (error) {
       console.error('Error loading reminders:', error);
-      // Fallback to localStorage
-      try {
-        const storedReminders = JSON.parse(localStorage.getItem('reminders')) || [];
-        const userReminders = storedReminders.filter(r => r.patientId === patientId);
-        setReminders(userReminders);
-      } catch (e) {
-        console.error('Error loading from localStorage:', e);
-      }
+      setReminders([]);
     } finally {
       setLoading(false);
     }
@@ -270,7 +233,7 @@ const MedicationAdherence = () => {
     }
   };
 
-  // Load adherence records for patient
+  // Load adherence records for the patient
   const loadAdherenceRecords = async (patientId) => {
     try {
       const token = getAuthToken();
@@ -435,7 +398,7 @@ const MedicationAdherence = () => {
     const diff = Math.abs(reminderDate - now);
     const diffMinutes = Math.floor(diff / (1000 * 60));
     
-    // Allow clicking within the time window (before or after scheduled time)
+    // Allow clicking within the time window (before or after the scheduled time)
     return diffMinutes <= timeWindowMinutes;
   };
 
@@ -448,7 +411,7 @@ const MedicationAdherence = () => {
       const reminderTime = reminder.reminder_time || reminder.time;
       if (!isTimeNearReminder(reminderTime)) {
         setToast({
-          message: 'Cannot record adherence: Time is not near scheduled medication time (must be within 30 minutes)',
+          message: 'Cannot record adherence: Time is not near the scheduled medication time (must be within 30 minutes)',
           type: 'error',
         });
         setLoading(false);
@@ -499,7 +462,7 @@ const MedicationAdherence = () => {
         return;
       }
       
-      // Find prescription for this reminder
+      // Find the prescription for this reminder
       const prescription = prescriptions.find(p => 
         p.prescription_id === reminder.prescription_id
       );
@@ -605,7 +568,7 @@ const MedicationAdherence = () => {
     const reminderTime = reminder.reminder_time || reminder.time;
     if (!isTimeNearReminder(reminderTime)) {
       setToast({
-        message: 'You can only mark as taken when time is near the scheduled medication time (within 30 minutes)',
+        message: 'You can only mark as taken when the time is near the scheduled medication time (within 30 minutes)',
         type: 'error',
       });
       return;
@@ -617,7 +580,7 @@ const MedicationAdherence = () => {
     const reminderTime = reminder.reminder_time || reminder.time;
     if (!isTimeNearReminder(reminderTime)) {
       setToast({
-        message: 'You can only mark as missed when time is near the scheduled medication time (within 30 minutes)',
+        message: 'You can only mark as missed when the time is near the scheduled medication time (within 30 minutes)',
         type: 'error',
       });
       return;
@@ -626,7 +589,7 @@ const MedicationAdherence = () => {
     recordAdherence(reminder, false, reason || null);
   };
 
-  // Save reminder (to localStorage for now, can be connected to API later)
+  // Save reminder using API
   const saveReminder = async (reminderData, isEdit = false) => {
     try {
       const patientId = currentUser.patient?.patient_id || currentUser.patient_id || currentUser.patientId;
@@ -638,60 +601,63 @@ const MedicationAdherence = () => {
         return;
       }
 
-      // For now, save to localStorage (can be replaced with API call)
-      const storedReminders = JSON.parse(localStorage.getItem('reminders')) || [];
+      const token = getAuthToken();
+      const url = isEdit && editingReminder
+        ? `${API_BASE_URL}/medication-adherence/reminders/${editingReminder.reminder_id || editingReminder.id}`
+        : `${API_BASE_URL}/medication-adherence/reminders`;
       
-      if (isEdit && editingReminder) {
-        // Update existing reminder
-        const index = storedReminders.findIndex(r => 
-          (r.reminder_id || r.id) === (editingReminder.reminder_id || editingReminder.id)
-        );
-        if (index !== -1) {
-          storedReminders[index] = {
-            ...storedReminders[index],
-            ...reminderData,
-            reminder_id: editingReminder.reminder_id || editingReminder.id,
-            patient_id: patientId,
-            updated_at: new Date().toISOString(),
-          };
-        }
-      } else {
-        // Create new reminder
-        const newReminderId = `reminder-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        storedReminders.push({
-          ...reminderData,
-          reminder_id: newReminderId,
-          patient_id: patientId,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          missed_doses: 0,
-        });
-      }
+      const method = isEdit ? 'PUT' : 'POST';
+      
+      const payload = {
+        patient_id: patientId,
+        medication_name: reminderData.medication_name,
+        dosage: reminderData.dosage || '',
+        frequency: reminderData.frequency || 'daily',
+        reminder_time: reminderData.reminder_time || '09:00',
+        active: reminderData.active !== false,
+        browser_notifications: reminderData.browser_notifications !== false,
+        sound_preference: reminderData.sound_preference || 'default',
+        special_instructions: reminderData.special_instructions || null,
+        prescription_id: reminderData.prescription_id || null,
+      };
 
-      localStorage.setItem('reminders', JSON.stringify(storedReminders));
-      
-      // Reload reminders
-      await loadReminders(patientId);
-      
-      setShowAddModal(false);
-      setShowEditModal(false);
-      setEditingReminder(null);
-      setNewReminder({
-        medication_name: '',
-        dosage: '',
-        frequency: 'daily',
-        reminder_time: '09:00',
-        active: true,
-        browser_notifications: true,
-        sound_preference: 'default',
-        special_instructions: '',
-        prescription_id: null,
+      const response = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify(payload),
       });
-      
-      setToast({
-        message: `Reminder ${isEdit ? 'updated' : 'created'} successfully`,
-        type: 'success',
-      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Reload reminders
+        await loadReminders(patientId);
+        
+        setShowAddModal(false);
+        setShowEditModal(false);
+        setEditingReminder(null);
+        setNewReminder({
+          medication_name: '',
+          dosage: '',
+          frequency: 'daily',
+          reminder_time: '09:00',
+          active: true,
+          browser_notifications: true,
+          sound_preference: 'default',
+          special_instructions: '',
+          prescription_id: null,
+        });
+        
+        setToast({
+          message: `Reminder ${isEdit ? 'updated' : 'created'} successfully`,
+          type: 'success',
+        });
+      } else {
+        throw new Error(data.message || 'Failed to save reminder');
+      }
     } catch (error) {
       console.error('Error saving reminder:', error);
       setToast({
@@ -723,31 +689,72 @@ const MedicationAdherence = () => {
     saveReminder(editingReminder, true);
   };
 
-  const handleDeleteReminder = (reminderId) => {
+  const handleDeleteReminder = async (reminderId) => {
     if (!window.confirm('Are you sure you want to delete this reminder?')) {
       return;
     }
 
     try {
       const patientId = currentUser.patient?.patient_id || currentUser.patient_id || currentUser.patientId;
-      const storedReminders = JSON.parse(localStorage.getItem('reminders')) || [];
-      const filtered = storedReminders.filter(r => 
-        (r.reminder_id || r.id) !== reminderId
-      );
-      localStorage.setItem('reminders', JSON.stringify(filtered));
-      
-      loadReminders(patientId);
-      setShowEditModal(false);
-      setEditingReminder(null);
-      
-      setToast({
-        message: 'Reminder deleted successfully',
-        type: 'success',
+      const token = getAuthToken();
+
+      const response = await fetch(`${API_BASE_URL}/medication-adherence/reminders/${reminderId}`, {
+        method: 'DELETE',
+        headers: {
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
       });
+
+      const data = await response.json();
+
+      if (data.success) {
+        await loadReminders(patientId);
+        setShowEditModal(false);
+        setEditingReminder(null);
+        
+        setToast({
+          message: 'Reminder deleted successfully',
+          type: 'success',
+        });
+      } else {
+        throw new Error(data.message || 'Failed to delete reminder');
+      }
     } catch (error) {
       console.error('Error deleting reminder:', error);
       setToast({
-        message: 'Failed to delete reminder',
+        message: 'Failed to delete reminder: ' + error.message,
+        type: 'error',
+      });
+    }
+  };
+
+  const handleToggleReminder = async (reminderId) => {
+    try {
+      const patientId = currentUser.patient?.patient_id || currentUser.patient_id || currentUser.patientId;
+      const token = getAuthToken();
+
+      const response = await fetch(`${API_BASE_URL}/medication-adherence/reminders/${reminderId}/toggle`, {
+        method: 'PUT',
+        headers: {
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        await loadReminders(patientId);
+        setToast({
+          message: `Reminder ${data.data?.active ? 'activated' : 'deactivated'} successfully`,
+          type: 'success',
+        });
+      } else {
+        throw new Error(data.message || 'Failed to toggle reminder');
+      }
+    } catch (error) {
+      console.error('Error toggling reminder:', error);
+      setToast({
+        message: 'Failed to toggle reminder: ' + error.message,
         type: 'error',
       });
     }
@@ -858,7 +865,7 @@ const MedicationAdherence = () => {
         <div style={{
           background: 'white',
           padding: '20px',
-          borderRadius: '12px',
+          borderRadius: '8px',
           boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
           display: 'flex',
           alignItems: 'center',
@@ -1001,7 +1008,7 @@ const MedicationAdherence = () => {
                      (reminder.frequency || '').toLowerCase().includes('once');
       const canRecordToday = !todayRecord && isDaily;
       
-      // Check if current time is near reminder time
+      // Check if current time is near the reminder time
       const isNearTime = isTimeNearReminder(reminderTime);
       const canClickButtons = canRecordToday && isNearTime;
 
@@ -1067,7 +1074,7 @@ const MedicationAdherence = () => {
                       gap: '4px',
                       opacity: (loading || !isNearTime) ? 0.6 : 1,
                     }}
-                    title={!isNearTime ? 'You can only mark as taken when time is near scheduled medication time (within 30 minutes)' : ''}
+                    title={!isNearTime ? 'You can only mark as taken when the time is near the scheduled medication time (within 30 minutes)' : ''}
                   >
                     <Check size={12} />
                     Taken
@@ -1088,7 +1095,7 @@ const MedicationAdherence = () => {
                       gap: '4px',
                       opacity: (loading || !isNearTime) ? 0.6 : 1,
                     }}
-                    title={!isNearTime ? 'You can only mark as missed when time is near scheduled medication time (within 30 minutes)' : ''}
+                    title={!isNearTime ? 'You can only mark as missed when the time is near the scheduled medication time (within 30 minutes)' : ''}
                   >
                     <AlertCircle size={12} />
                     Missed
@@ -1160,7 +1167,7 @@ const MedicationAdherence = () => {
   // Show loading state while fetching user
   if (loading && !currentUser) {
     return (
-      <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', paddingTop: '100px' }}>
+      <div style={{ padding: '20px', paddingTop: '80px' }}>
         <div style={{
           padding: '15px',
           backgroundColor: '#d1ecf1',
@@ -1178,7 +1185,7 @@ const MedicationAdherence = () => {
   // Check if user is a patient
   if (!currentUser) {
     return (
-      <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', paddingTop: '100px' }}>
+      <div style={{ padding: '20px', paddingTop: '80px' }}>
         <div style={{
           padding: '15px',
           backgroundColor: '#f8d7da',
@@ -1197,7 +1204,7 @@ const MedicationAdherence = () => {
   
   if (currentUser.role !== 'patient' && currentUser.role !== 'admin') {
     return (
-      <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', paddingTop: '100px' }}>
+      <div style={{ padding: '20px', paddingTop: '80px' }}>
         <div style={{
           padding: '15px',
           backgroundColor: '#f8d7da',
@@ -1213,7 +1220,7 @@ const MedicationAdherence = () => {
 
   if (!patientId && currentUser.role === 'patient') {
     return (
-      <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', paddingTop: '100px' }}>
+      <div style={{ padding: '20px', paddingTop: '80px' }}>
         <div style={{
           padding: '15px',
           backgroundColor: '#fff3cd',
@@ -1228,50 +1235,42 @@ const MedicationAdherence = () => {
   }
 
   return (
-    <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh', paddingTop: '100px' }}>
-      {/* Header with Title - Consistent with Patients.jsx */}
-      <div style={{ 
-        marginBottom: '30px', 
-        background: 'linear-gradient(to right, #D84040, #A31D1D)', 
-        padding: '30px', 
-        borderRadius: '12px', 
-        boxShadow: '0 4px 15px rgba(216, 64, 64, 0.2)' 
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h2 style={{ margin: '0 0 5px 0', color: 'white', fontSize: '24px', fontWeight: 'bold' }}>Medication Adherence</h2>
-            <p style={{ margin: 0, color: '#F8F2DE', fontSize: '16px' }}>Track your medication adherence and view your progress</p>
-          </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button
-              onClick={() => setShowAddModal(true)}
-              style={{
-                padding: '10px 16px',
-                background: '#ECDCBF',
-                color: '#A31D1D',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
-                fontWeight: '500',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px'
-              }}
-              onMouseEnter={(e) => {
-                e.target.style.background = '#F8F2DE';
-                e.target.style.transform = 'translateY(-1px)';
-              }}
-              onMouseLeave={(e) => {
-                e.target.style.background = '#ECDCBF';
-                e.target.style.transform = 'translateY(0)';
-              }}
-            >
-              <Plus size={16} />
-              Add Reminder
-            </button>
-          </div>
+    <div style={{ padding: '20px', paddingTop: '80px' }}>
+      {/* Header */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '30px',
+        }}
+      >
+        <div>
+          <h2 style={{ margin: 0, color: '#333', fontSize: '24px' }}>
+            Medication Adherence
+          </h2>
+          <p style={{ margin: '5px 0 0 0', color: '#6c757d', fontSize: '14px' }}>
+            Track your medication adherence and view your progress
+          </p>
         </div>
+        <button
+          onClick={() => setShowAddModal(true)}
+          style={{
+            padding: '10px 16px',
+            background: '#007bff',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <Plus size={16} />
+          Add Reminder
+        </button>
       </div>
 
       {/* Adherence Card - Step 5: Display updated → Progress rings and percentages updated */}

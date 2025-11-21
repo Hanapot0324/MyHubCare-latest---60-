@@ -2,6 +2,7 @@ import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db.js';
 import { logAudit, getUserInfoForAudit, getClientIp } from '../utils/auditLogger.js';
+import { calculateARPARiskScore } from '../services/arpaService.js';
 
 const router = express.Router();
 
@@ -186,6 +187,17 @@ router.post('/', async (req, res) => {
           [newMissedDoses, reminder.reminder_id]
         );
       }
+    }
+
+    // Auto-calculate ARPA risk score after adherence update
+    try {
+      const userId = userInfo?.user_id || req.user?.user_id || null;
+      if (userId) {
+        await calculateARPARiskScore(patient_id, userId, { skipAudit: false });
+      }
+    } catch (arpaError) {
+      console.error('ARPA auto-calculation error after adherence update:', arpaError);
+      // Don't fail the request if ARPA calculation fails
     }
 
     // Log audit entry (D8)
@@ -589,14 +601,13 @@ router.post('/reminders', async (req, res) => {
 
     const reminder_id = uuidv4();
 
-    // Insert reminder (only using columns that exist in the table)
-    // Note: browser_notifications, sound_preference, and special_instructions
-    // are stored in the frontend/localStorage if the table doesn't have these columns
+    // Insert reminder using all available columns from SQL structure
     await db.query(
       `INSERT INTO medication_reminders (
         reminder_id, prescription_id, patient_id, medication_name,
-        dosage, frequency, reminder_time, active, missed_doses
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        dosage, frequency, reminder_time, sound_preference, 
+        browser_notifications, special_instructions, active, missed_doses
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       [
         reminder_id,
         prescription_id || null,
@@ -605,7 +616,10 @@ router.post('/reminders', async (req, res) => {
         dosage || null,
         frequency,
         formattedTime,
-        active,
+        sound_preference || 'default',
+        browser_notifications !== false ? 1 : 0,
+        special_instructions || null,
+        active !== false ? 1 : 0,
       ]
     );
 
@@ -675,6 +689,375 @@ router.post('/reminders', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to create medication reminder',
+      error: error.message,
+    });
+  }
+});
+
+// Update medication reminder
+router.put('/reminders/:id', async (req, res) => {
+  let userInfo = null;
+
+  try {
+    const { id } = req.params;
+    const {
+      medication_name,
+      dosage,
+      frequency,
+      reminder_time,
+      active,
+      browser_notifications,
+      sound_preference,
+      special_instructions,
+    } = req.body;
+
+    // Get user info for audit logging
+    if (req.user?.user_id) {
+      userInfo = await getUserInfoForAudit(req.user.user_id);
+    }
+
+    // Check if reminder exists and get old values
+    const [oldReminder] = await db.query(
+      `SELECT mr.*, 
+              CONCAT(pa.first_name, ' ', pa.last_name) as patient_name
+       FROM medication_reminders mr
+       LEFT JOIN patients pa ON mr.patient_id = pa.patient_id
+       WHERE mr.reminder_id = ?`,
+      [id]
+    );
+
+    if (oldReminder.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Medication reminder not found',
+      });
+    }
+
+    const oldValue = oldReminder[0];
+
+    // Format reminder_time to HH:MM:SS if needed
+    let formattedTime = reminder_time || oldValue.reminder_time;
+    if (reminder_time && !reminder_time.includes(':')) {
+      formattedTime = `${reminder_time}:00`;
+    } else if (reminder_time && reminder_time.split(':').length === 2) {
+      formattedTime = `${reminder_time}:00`;
+    }
+
+    // Build update query dynamically based on provided fields
+    const updates = [];
+    const params = [];
+
+    if (medication_name !== undefined) {
+      updates.push('medication_name = ?');
+      params.push(medication_name);
+    }
+    if (dosage !== undefined) {
+      updates.push('dosage = ?');
+      params.push(dosage);
+    }
+    if (frequency !== undefined) {
+      updates.push('frequency = ?');
+      params.push(frequency);
+    }
+    if (reminder_time !== undefined) {
+      updates.push('reminder_time = ?');
+      params.push(formattedTime);
+    }
+    if (sound_preference !== undefined) {
+      updates.push('sound_preference = ?');
+      params.push(sound_preference);
+    }
+    if (browser_notifications !== undefined) {
+      updates.push('browser_notifications = ?');
+      params.push(browser_notifications ? 1 : 0);
+    }
+    if (special_instructions !== undefined) {
+      updates.push('special_instructions = ?');
+      params.push(special_instructions || null);
+    }
+    if (active !== undefined) {
+      updates.push('active = ?');
+      params.push(active ? 1 : 0);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No fields provided to update',
+      });
+    }
+
+    // Always update updated_at timestamp
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    params.push(id);
+
+    const query = `UPDATE medication_reminders SET ${updates.join(', ')} WHERE reminder_id = ?`;
+    await db.query(query, params);
+
+    // Fetch updated reminder
+    const [updatedReminder] = await db.query(
+      `SELECT mr.*, 
+              p.prescription_number,
+              CONCAT(pa.first_name, ' ', pa.last_name) as patient_name
+       FROM medication_reminders mr
+       LEFT JOIN prescriptions p ON mr.prescription_id = p.prescription_id
+       LEFT JOIN patients pa ON mr.patient_id = pa.patient_id
+       WHERE mr.reminder_id = ?`,
+      [id]
+    );
+
+    // Log audit entry
+    if (userInfo) {
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'UPDATE',
+        module: 'Medication Adherence',
+        entity_type: 'medication_reminder',
+        entity_id: id,
+        record_id: id,
+        old_value: {
+          medication_name: oldValue.medication_name,
+          dosage: oldValue.dosage,
+          frequency: oldValue.frequency,
+          reminder_time: oldValue.reminder_time,
+          active: oldValue.active,
+        },
+        new_value: {
+          medication_name: medication_name !== undefined ? medication_name : oldValue.medication_name,
+          dosage: dosage !== undefined ? dosage : oldValue.dosage,
+          frequency: frequency !== undefined ? frequency : oldValue.frequency,
+          reminder_time: formattedTime,
+          active: active !== undefined ? active : oldValue.active,
+        },
+        change_summary: `Updated medication reminder for ${updatedReminder[0].medication_name || oldValue.medication_name}`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'],
+        status: 'success',
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Medication reminder updated successfully',
+      data: updatedReminder[0],
+    });
+  } catch (error) {
+    console.error('Error updating medication reminder:', error);
+
+    // Log failed audit entry
+    if (userInfo) {
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'UPDATE',
+        module: 'Medication Adherence',
+        entity_type: 'medication_reminder',
+        entity_id: req.params.id,
+        status: 'failed',
+        error_message: error.message,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'],
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update medication reminder',
+      error: error.message,
+    });
+  }
+});
+
+// Delete medication reminder
+router.delete('/reminders/:id', async (req, res) => {
+  let userInfo = null;
+
+  try {
+    const { id } = req.params;
+
+    // Get user info for audit logging
+    if (req.user?.user_id) {
+      userInfo = await getUserInfoForAudit(req.user.user_id);
+    }
+
+    // Check if reminder exists and get details
+    const [reminderCheck] = await db.query(
+      `SELECT mr.*, 
+              CONCAT(pa.first_name, ' ', pa.last_name) as patient_name
+       FROM medication_reminders mr
+       LEFT JOIN patients pa ON mr.patient_id = pa.patient_id
+       WHERE mr.reminder_id = ?`,
+      [id]
+    );
+
+    if (reminderCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Medication reminder not found',
+      });
+    }
+
+    const reminder = reminderCheck[0];
+
+    // Delete reminder
+    await db.query('DELETE FROM medication_reminders WHERE reminder_id = ?', [id]);
+
+    // Log audit entry
+    if (userInfo) {
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'DELETE',
+        module: 'Medication Adherence',
+        entity_type: 'medication_reminder',
+        entity_id: id,
+        record_id: id,
+        old_value: reminder,
+        change_summary: `Deleted medication reminder for ${reminder.medication_name}`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'],
+        status: 'success',
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Medication reminder deleted successfully',
+    });
+  } catch (error) {
+    console.error('Error deleting medication reminder:', error);
+
+    // Log failed audit entry
+    if (userInfo) {
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'DELETE',
+        module: 'Medication Adherence',
+        entity_type: 'medication_reminder',
+        entity_id: req.params.id,
+        status: 'failed',
+        error_message: error.message,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'],
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete medication reminder',
+      error: error.message,
+    });
+  }
+});
+
+// Toggle medication reminder active status
+router.put('/reminders/:id/toggle', async (req, res) => {
+  let userInfo = null;
+
+  try {
+    const { id } = req.params;
+
+    // Get user info for audit logging
+    if (req.user?.user_id) {
+      userInfo = await getUserInfoForAudit(req.user.user_id);
+    }
+
+    // Check if reminder exists and get current status
+    const [reminderCheck] = await db.query(
+      `SELECT mr.*, 
+              CONCAT(pa.first_name, ' ', pa.last_name) as patient_name
+       FROM medication_reminders mr
+       LEFT JOIN patients pa ON mr.patient_id = pa.patient_id
+       WHERE mr.reminder_id = ?`,
+      [id]
+    );
+
+    if (reminderCheck.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Medication reminder not found',
+      });
+    }
+
+    const reminder = reminderCheck[0];
+    const newActiveStatus = !reminder.active;
+
+    // Toggle active status
+    await db.query(
+      'UPDATE medication_reminders SET active = ?, updated_at = CURRENT_TIMESTAMP WHERE reminder_id = ?',
+      [newActiveStatus ? 1 : 0, id]
+    );
+
+    // Fetch updated reminder
+    const [updatedReminder] = await db.query(
+      `SELECT mr.*, 
+              p.prescription_number,
+              CONCAT(pa.first_name, ' ', pa.last_name) as patient_name
+       FROM medication_reminders mr
+       LEFT JOIN prescriptions p ON mr.prescription_id = p.prescription_id
+       LEFT JOIN patients pa ON mr.patient_id = pa.patient_id
+       WHERE mr.reminder_id = ?`,
+      [id]
+    );
+
+    // Log audit entry
+    if (userInfo) {
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'UPDATE',
+        module: 'Medication Adherence',
+        entity_type: 'medication_reminder',
+        entity_id: id,
+        record_id: id,
+        old_value: {
+          active: reminder.active,
+        },
+        new_value: {
+          active: newActiveStatus,
+        },
+        change_summary: `${newActiveStatus ? 'Activated' : 'Deactivated'} medication reminder for ${reminder.medication_name}`,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'],
+        status: 'success',
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Medication reminder ${newActiveStatus ? 'activated' : 'deactivated'} successfully`,
+      data: updatedReminder[0],
+    });
+  } catch (error) {
+    console.error('Error toggling medication reminder:', error);
+
+    // Log failed audit entry
+    if (userInfo) {
+      await logAudit({
+        user_id: userInfo.user_id,
+        user_name: userInfo.user_name,
+        user_role: userInfo.user_role,
+        action: 'UPDATE',
+        module: 'Medication Adherence',
+        entity_type: 'medication_reminder',
+        entity_id: req.params.id,
+        status: 'failed',
+        error_message: error.message,
+        ip_address: getClientIp(req),
+        user_agent: req.headers['user-agent'],
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to toggle medication reminder',
       error: error.message,
     });
   }

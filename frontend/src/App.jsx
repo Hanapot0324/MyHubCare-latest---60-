@@ -28,6 +28,7 @@ import BranchManagement from './components/BranchManagement.jsx';
 import Profile from './components/Profile.jsx';
 import Settings from './components/Settings.jsx';
 import MedicationAdherence from './components/MedicationAdherence.jsx';
+import Medications from './components/Medications.jsx';
 import MyAppointments from './components/MyAppointments.jsx';
 import CareTasks from './components/CareTasks.jsx';
 import Reports from './components/Reports.jsx';
@@ -155,7 +156,14 @@ export default function App() {
               </MainLayout>
             }
           />
-
+          <Route
+            path="/medications"
+            element={
+              <MainLayout socket={socket}>
+                <Medications socket={socket} />
+              </MainLayout>
+            }
+          />
           <Route
             path="/art-regimen"
             element={

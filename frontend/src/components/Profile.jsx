@@ -133,22 +133,54 @@ const Profile = () => {
         setIdentifiers([]);
       }
 
-      // Fetch risk scores
+      // Fetch ARPA risk scores
       try {
-        const riskScoresResponse = await fetch(
-          `${API_URL}/profile/${patientId}/risk-scores`,
+        // Fetch current ARPA score
+        const currentARPAResponse = await fetch(
+          `${API_URL}/arpa/patient/${patientId}`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
             },
           }
         );
-        const riskScoresData = await riskScoresResponse.json();
-        if (riskScoresData.success) {
-          setRiskScores(riskScoresData.data || []);
+        const currentARPAData = await currentARPAResponse.json();
+        
+        // Fetch ARPA history
+        const historyResponse = await fetch(
+          `${API_URL}/arpa/patient/${patientId}/history?limit=10`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+        const historyData = await historyResponse.json();
+        
+        // Combine current score with history
+        const allScores = [];
+        if (currentARPAData.success && currentARPAData.data) {
+          allScores.push(currentARPAData.data);
         }
+        if (historyData.success && historyData.data) {
+          // Add history scores that aren't already included
+          historyData.data.forEach(score => {
+            if (!allScores.find(s => s.risk_score_id === score.risk_score_id)) {
+              allScores.push(score);
+            }
+          });
+        }
+        
+        // Sort by calculated_on date (most recent first)
+        allScores.sort((a, b) => {
+          const dateA = new Date(a.calculated_on || a.arpa_last_calculated || 0);
+          const dateB = new Date(b.calculated_on || b.arpa_last_calculated || 0);
+          return dateB - dateA;
+        });
+        
+        setRiskScores(allScores);
       } catch (err) {
-        console.error('Error fetching risk scores:', err);
+        console.error('Error fetching ARPA risk scores:', err);
         setRiskScores([]);
       }
 
@@ -1124,7 +1156,7 @@ const Profile = () => {
         )}
       </div>
 
-      {/* Risk Scores Section */}
+      {/* ARPA Risk Scores Section */}
       <div
         style={{
           background: 'white',
@@ -1134,55 +1166,208 @@ const Profile = () => {
           boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
         }}
       >
-        <h3
+        <div
           style={{
-            margin: '0 0 20px 0',
-            color: '#A31D1D',
-            fontSize: '18px',
             display: 'flex',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            gap: '8px',
+            marginBottom: '20px',
           }}
         >
-          <Activity size={20} />
-          Risk Scores
-        </h3>
+          <h3
+            style={{
+              margin: 0,
+              color: '#A31D1D',
+              fontSize: '18px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <Activity size={20} />
+            ARPA Risk Assessment
+          </h3>
+          {patient?.arpa_risk_score !== null && patient?.arpa_risk_score !== undefined && (
+            <div
+              style={{
+                padding: '8px 16px',
+                borderRadius: '6px',
+                fontSize: '14px',
+                fontWeight: 600,
+                backgroundColor:
+                  patient.arpa_risk_score >= 70
+                    ? '#dc3545'
+                    : patient.arpa_risk_score >= 50
+                    ? '#fd7e14'
+                    : patient.arpa_risk_score >= 40
+                    ? '#ffc107'
+                    : patient.arpa_risk_score >= 20
+                    ? '#17a2b8'
+                    : '#28a745',
+                color: 'white',
+              }}
+            >
+              Current Score: {patient.arpa_risk_score}
+            </div>
+          )}
+        </div>
 
         {riskScores.length === 0 ? (
-          <p style={{ color: '#6c757d', textAlign: 'center', padding: '20px' }}>
-            No risk scores recorded yet
-          </p>
+          <div style={{ textAlign: 'center', padding: '20px' }}>
+            <p style={{ color: '#6c757d', marginBottom: '15px' }}>
+              No ARPA risk scores calculated yet
+            </p>
+            <p style={{ color: '#6c757d', fontSize: '14px' }}>
+              Risk scores are automatically calculated when clinical data is updated.
+            </p>
+          </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {riskScores.map((score) => (
-              <div
-                key={score.risk_score_id}
-                style={{
-                  padding: '15px',
-                  border: '1px solid #e9ecef',
-                  borderRadius: '4px',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                  <div style={{ fontWeight: 600, fontSize: '18px' }}>
-                    Score: {score.score}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {riskScores.map((score, index) => {
+              const riskLevel = score.risk_level || 
+                (score.score >= 70 ? 'HIGH' :
+                 score.score >= 50 ? 'MEDIUM-HIGH' :
+                 score.score >= 40 ? 'MEDIUM' :
+                 score.score >= 20 ? 'LOW-MEDIUM' : 'LOW');
+              
+              const riskColor =
+                riskLevel === 'HIGH'
+                  ? '#dc3545'
+                  : riskLevel === 'MEDIUM-HIGH'
+                  ? '#fd7e14'
+                  : riskLevel === 'MEDIUM'
+                  ? '#ffc107'
+                  : riskLevel === 'LOW-MEDIUM'
+                  ? '#17a2b8'
+                  : '#28a745';
+
+              const isCurrent = index === 0 && score.score === patient?.arpa_risk_score;
+
+              return (
+                <div
+                  key={score.risk_score_id || `score-${index}`}
+                  style={{
+                    padding: '20px',
+                    border: isCurrent ? '2px solid #D84040' : '1px solid #e9ecef',
+                    borderRadius: '6px',
+                    backgroundColor: isCurrent ? '#fff5f5' : 'white',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                        <div style={{ fontWeight: 700, fontSize: '24px', color: riskColor }}>
+                          {score.score || score.arpa_risk_score || 'N/A'}
+                        </div>
+                        <div
+                          style={{
+                            padding: '4px 12px',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            backgroundColor: riskColor,
+                            color: 'white',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          {riskLevel}
+                        </div>
+                        {isCurrent && (
+                          <span
+                            style={{
+                              padding: '4px 8px',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              backgroundColor: '#D84040',
+                              color: 'white',
+                            }}
+                          >
+                            CURRENT
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ color: '#6c757d', fontSize: '13px' }}>
+                        Calculated: {formatDate(score.calculated_on || score.arpa_last_calculated)}
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ color: '#6c757d', fontSize: '14px' }}>
-                    {formatDate(score.calculated_on)}
-                  </div>
+                  
+                  {score.recommendations && (
+                    <div
+                      style={{
+                        padding: '12px',
+                        backgroundColor: '#f8f9fa',
+                        borderRadius: '4px',
+                        marginTop: '12px',
+                        fontSize: '14px',
+                        color: '#495057',
+                        lineHeight: '1.5',
+                      }}
+                    >
+                      <strong style={{ color: '#A31D1D' }}>Recommendations:</strong>
+                      <div style={{ marginTop: '6px' }}>{score.recommendations}</div>
+                    </div>
+                  )}
+                  
+                  {score.risk_factors && typeof score.risk_factors === 'object' && (
+                    <details style={{ marginTop: '12px' }}>
+                      <summary
+                        style={{
+                          cursor: 'pointer',
+                          color: '#6c757d',
+                          fontSize: '13px',
+                          fontWeight: 500,
+                          userSelect: 'none',
+                        }}
+                      >
+                        View Risk Factors
+                      </summary>
+                      <div
+                        style={{
+                          marginTop: '10px',
+                          padding: '12px',
+                          backgroundColor: '#f8f9fa',
+                          borderRadius: '4px',
+                          fontSize: '13px',
+                        }}
+                      >
+                        {Object.entries(score.risk_factors).map(([key, value]) => {
+                          const formattedKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+                          let displayValue = value;
+                          if (typeof value === 'object' && value !== null) {
+                            if (Array.isArray(value)) {
+                              displayValue = value.join(', ');
+                            } else {
+                              displayValue = JSON.stringify(value);
+                            }
+                          } else if (typeof value === 'number') {
+                            displayValue = value.toFixed(2);
+                          }
+                          
+                          return (
+                            <div key={key} style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                              <span style={{ color: '#6c757d' }}>
+                                {formattedKey}:
+                              </span>
+                              <span style={{ fontWeight: 500, color: '#495057' }}>
+                                {String(displayValue)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  )}
+                  
+                  {score.calculated_by_name && (
+                    <div style={{ color: '#6c757d', fontSize: '12px', marginTop: '10px', fontStyle: 'italic' }}>
+                      Calculated by: {score.calculated_by_name || score.calculated_by_full_name || 'System'}
+                    </div>
+                  )}
                 </div>
-                {score.recommendations && (
-                  <div style={{ color: '#6c757d', fontSize: '14px', marginTop: '10px' }}>
-                    {score.recommendations}
-                  </div>
-                )}
-                {score.calculated_by_name && (
-                  <div style={{ color: '#6c757d', fontSize: '12px', marginTop: '5px' }}>
-                    Calculated by: {score.calculated_by_name}
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

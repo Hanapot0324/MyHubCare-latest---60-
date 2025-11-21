@@ -7,7 +7,10 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 import authRoutes from './routes/auth.js';
+import mfaRoutes from './routes/mfa.js';
 import patientRoutes from './routes/patient.js';
+import patientDocumentsRoutes from './routes/patient-documents.js';
+import arpaRoutes from './routes/arpa.js';
 import facilityRoutes from './routes/facilities.js';
 import regionRoutes from './routes/regions.js';
 import inventoryRoutes from './routes/inventory.js';
@@ -29,6 +32,7 @@ import referralsRoutes from './routes/referrals.js';
 import counselingSessionsRoutes from './routes/counseling-sessions.js';
 import htsSessionsRoutes from './routes/hts-sessions.js';
 import careTasksRoutes from './routes/care-tasks.js';
+import reportsRoutes from './routes/reports.js';
 import { processAppointmentReminders } from './services/reminderService.js';
 
 const app = express();
@@ -69,7 +73,10 @@ app.use(express.json());
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/mfa', mfaRoutes);
 app.use('/api/patients', patientRoutes);
+app.use('/api/patient-documents', patientDocumentsRoutes);
+app.use('/api/arpa', arpaRoutes);
 app.use('/api/facilities', facilityRoutes);
 app.use('/api/regions', regionRoutes);
 app.use('/api/inventory', inventoryRoutes);
@@ -91,6 +98,7 @@ app.use('/api/referrals', referralsRoutes);
 app.use('/api/counseling-sessions', counselingSessionsRoutes);
 app.use('/api/hts-sessions', htsSessionsRoutes);
 app.use('/api/care-tasks', careTasksRoutes);
+app.use('/api/reports', reportsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

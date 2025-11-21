@@ -38,11 +38,18 @@ const MyAppointments = ({ socket }) => {
 
     useEffect(() => {
         getCurrentUser();
-        fetchAppointments();
         fetchFacilities();
         fetchProviders();
         fetchNotifications();
     }, []);
+
+    // Fetch appointments after current user is loaded (to filter by patient_id)
+    useEffect(() => {
+        if (currentUserRole && (currentPatientId || currentUserRole !== 'patient')) {
+            fetchAppointments();
+            fetchAllAppointmentsForCalendar();
+        }
+    }, [currentUserRole, currentPatientId]);
 
     // Fetch notifications
     const fetchNotifications = async () => {
@@ -191,7 +198,13 @@ const MyAppointments = ({ socket }) => {
                 return;
             }
 
-            const response = await fetch(`${API_BASE_URL}/appointments`, {
+            // Build URL with patient_id filter if user is a patient
+            let url = `${API_BASE_URL}/appointments`;
+            if (currentUserRole === 'patient' && currentPatientId) {
+                url += `?patient_id=${currentPatientId}`;
+            }
+
+            const response = await fetch(url, {
                 headers: {
                     Authorization: `Bearer ${token}`
                 }
@@ -200,7 +213,17 @@ const MyAppointments = ({ socket }) => {
             const data = await response.json();
 
             if (data.success) {
-                setAppointments(data.data || []);
+                // For patients, only show their own appointments in the list
+                const allAppointments = data.data || [];
+                if (currentUserRole === 'patient' && currentPatientId) {
+                    // Double-check filter (backend should already filter, but ensure client-side too)
+                    const patientAppointments = allAppointments.filter(apt => 
+                        apt.patient_id === currentPatientId
+                    );
+                    setAppointments(patientAppointments);
+                } else {
+                    setAppointments(allAppointments);
+                }
             } else {
                 throw new Error(data.message || 'Failed to fetch appointments');
             }
@@ -339,11 +362,62 @@ const MyAppointments = ({ socket }) => {
         setSelectedDay(day);
     };
 
+    // Store all appointments for calendar time indicators (without patient details)
+    const [allAppointmentsForCalendar, setAllAppointmentsForCalendar] = useState([]);
+
+    // Fetch all appointments for calendar (without patient details for privacy)
+    const fetchAllAppointmentsForCalendar = async () => {
+        try {
+            const token = getAuthToken();
+            if (!token) return;
+
+            const response = await fetch(`${API_BASE_URL}/appointments`, {
+                headers: {
+                    Authorization: `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                // For calendar, we only need time slots, not patient details
+                // Filter out cancelled/no_show appointments
+                const activeAppointments = (data.data || []).filter(apt => 
+                    apt.status !== 'cancelled' && apt.status !== 'no_show'
+                );
+                setAllAppointmentsForCalendar(activeAppointments);
+            }
+        } catch (error) {
+            console.error('Error fetching appointments for calendar:', error);
+        }
+    };
+
+    useEffect(() => {
+        fetchAllAppointmentsForCalendar();
+        // Refresh every 30 seconds
+        const interval = setInterval(fetchAllAppointmentsForCalendar, 30000);
+        return () => clearInterval(interval);
+    }, []);
+
     const getAppointmentsForDay = (day) => {
         if (!day) return [];
         
         const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        // Only return current patient's appointments for the list view
         return appointments.filter(apt => {
+            const aptDate = new Date(apt.scheduled_start);
+            const aptDateStr = `${aptDate.getFullYear()}-${String(aptDate.getMonth() + 1).padStart(2, '0')}-${String(aptDate.getDate()).padStart(2, '0')}`;
+            return aptDateStr === dateStr;
+        });
+    };
+
+    // Get all appointments for a day (for calendar time indicators only - no patient details)
+    const getAllAppointmentsForDay = (day) => {
+        if (!day) return [];
+        
+        const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        // Return all active appointments for time indicators (patients see times, not names)
+        return allAppointmentsForCalendar.filter(apt => {
             const aptDate = new Date(apt.scheduled_start);
             const aptDateStr = `${aptDate.getFullYear()}-${String(aptDate.getMonth() + 1).padStart(2, '0')}-${String(aptDate.getDate()).padStart(2, '0')}`;
             return aptDateStr === dateStr;
@@ -660,13 +734,22 @@ const MyAppointments = ({ socket }) => {
         }
         
         for (let day = 1; day <= daysInMonth; day++) {
-            const dayAppointments = getAppointmentsForDay(day);
+            const dayAppointments = getAppointmentsForDay(day); // Patient's own appointments for list
+            const allDayAppointments = getAllAppointmentsForDay(day); // All appointments for time indicators
             const isToday = isCurrentMonth && day === todayDate;
             const isSelected = selectedDay === day;
             
             // Get availability status for this day
             const dateStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
             const availability = dayAvailability[dateStr];
+            
+            // Get active appointments for time indicators (only show times, not patient names)
+            const activeAppointments = allDayAppointments.filter(a => 
+                a.status === 'scheduled' || 
+                a.status === 'confirmed' || 
+                a.status === 'pending_provider_confirmation' || 
+                a.status === 'pending_patient_confirmation'
+            );
             
             // Determine background color based on availability (not border)
             let backgroundColor = isSelected ? '#F8F2DE' : 'white';
@@ -681,6 +764,9 @@ const MyAppointments = ({ socket }) => {
                 backgroundColor = '#F8F2DE'; // Light beige background for available
                 borderColor = '#28a745'; // Green border
             }
+            
+            const hasAppointments = dayAppointments.length > 0;
+            const hasAnyAppointments = allDayAppointments.length > 0;
             
             days.push(
                 <div 
@@ -708,43 +794,96 @@ const MyAppointments = ({ socket }) => {
                         border: `2px solid ${borderColor}`,
                         borderRadius: '4px',
                         backgroundColor: backgroundColor,
-                        cursor: 'pointer',
+                        cursor: hasAppointments || hasAnyAppointments ? 'pointer' : 'default', // Only show pointer if there are appointments
                         position: 'relative',
                         overflow: 'hidden',
                         transition: 'all 0.2s ease'
                     }}
                     onMouseEnter={(e) => {
-                        if (!isSelected) {
+                        // Only show hover effect if there are appointments
+                        if ((hasAppointments || hasAnyAppointments) && !isSelected) {
                             e.currentTarget.style.backgroundColor = '#F8F2DE';
                         }
                     }}
                     onMouseLeave={(e) => {
                         e.currentTarget.style.backgroundColor = backgroundColor;
                     }}
-                    title={availability === 'available' ? 'Available slots' : availability === 'unavailable' ? 'No available slots' : dayAppointments.length > 0 ? `${dayAppointments.length} appointment(s)` : 'Click to check availability'}
+                    title={availability === 'available' ? 'Available slots' : availability === 'unavailable' ? 'No available slots' : hasAppointments ? `${dayAppointments.length} of your appointment(s)` : hasAnyAppointments ? 'Time slots booked (see times below)' : 'Click to check availability'}
                 >
                     <div style={{
                         fontWeight: isToday ? 'bold' : 'normal',
                         color: isToday ? '#D84040' : '#A31D1D',
-                        marginBottom: '5px'
+                        marginBottom: '5px',
+                        fontSize: '16px'
                     }}>
                         {day}
                     </div>
-                    {dayAppointments.length > 0 && (
+                    {/* Show patient's own appointments count */}
+                    {hasAppointments && (
                         <div style={{
                             fontSize: '11px',
                             color: '#A31D1D',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap'
+                            whiteSpace: 'nowrap',
+                            fontWeight: '500',
+                            marginBottom: '3px'
                         }}>
                             {dayAppointments.length > 1 ? 
-                                `${dayAppointments.length} appointments` : 
+                                `${dayAppointments.length} of your appointments` : 
                                 formatAppointmentType(dayAppointments[0].appointment_type)
                             }
                         </div>
                     )}
-                    {dayAppointments.length > 0 && (
+                    {/* Show green time indicators for all scheduled appointments (without patient names) */}
+                    {activeAppointments.length > 0 && (
+                        <div style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: '2px',
+                            marginTop: '2px'
+                        }}>
+                            {activeAppointments.slice(0, 3).map((apt, idx) => {
+                                const startDate = new Date(apt.scheduled_start);
+                                const timeStr = startDate.toLocaleTimeString('en-US', { 
+                                    hour: '2-digit', 
+                                    minute: '2-digit',
+                                    hour12: false 
+                                });
+                                return (
+                                    <div
+                                        key={idx}
+                                        style={{
+                                            backgroundColor: '#28a745',
+                                            color: 'white',
+                                            fontSize: '9px',
+                                            padding: '2px 4px',
+                                            borderRadius: '3px',
+                                            fontWeight: '600',
+                                            lineHeight: '1.2'
+                                        }}
+                                        title={`Time slot booked at ${timeStr}`}
+                                    >
+                                        {timeStr}
+                                    </div>
+                                );
+                            })}
+                            {activeAppointments.length > 3 && (
+                                <div style={{
+                                    backgroundColor: '#28a745',
+                                    color: 'white',
+                                    fontSize: '9px',
+                                    padding: '2px 4px',
+                                    borderRadius: '3px',
+                                    fontWeight: '600'
+                                }}>
+                                    +{activeAppointments.length - 3}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {/* Status indicator dot - only for patient's own appointments */}
+                    {hasAppointments && (
                         <div style={{
                             position: 'absolute',
                             bottom: '5px',

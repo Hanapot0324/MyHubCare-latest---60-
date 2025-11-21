@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db.js';
 import { logAudit, getUserInfoForAudit, getClientIp } from '../utils/auditLogger.js';
 import { authenticateToken } from './auth.js';
+import { calculateARPARiskScore } from '../services/arpaService.js';
 
 const router = express.Router();
 
@@ -395,6 +396,14 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     await connection.commit();
+
+    // Auto-calculate ARPA risk score after prescription creation
+    try {
+      await calculateARPARiskScore(patient_id, req.user.user_id, { skipAudit: false });
+    } catch (arpaError) {
+      console.error('ARPA auto-calculation error after prescription creation:', arpaError);
+      // Don't fail the request if ARPA calculation fails
+    }
 
     res.status(201).json({
       success: true,

@@ -2,6 +2,8 @@ import express from 'express';
 import { db } from '../db.js';
 import { authenticateToken } from './auth.js';
 import { logAudit, getUserInfoForAudit, getClientIp } from '../utils/auditLogger.js';
+import { calculateARPARiskScore } from '../services/arpaService.js';
+import { createNotification } from './notifications.js';
 import crypto from 'crypto';
 
 const router = express.Router();
@@ -417,21 +419,91 @@ router.post('/', authenticateToken, async (req, res) => {
       status: 'success',
     });
 
+    // Auto-calculate ARPA risk score after lab result creation
+    try {
+      await calculateARPARiskScore(patient_id, req.user.user_id, { skipAudit: false });
+    } catch (arpaError) {
+      console.error('ARPA auto-calculation error after lab result creation:', arpaError);
+      // Don't fail the request if ARPA calculation fails
+    }
+
     // If critical, trigger notification (P5.4)
     if (is_critical) {
-      // Get ordering provider from lab order
+      // Get ordering provider and patient info from lab order
       const [orderInfo] = await connection.query(
-        'SELECT ordering_provider_id FROM lab_orders WHERE order_id = ?',
+        `SELECT lo.ordering_provider_id, 
+                CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+                lo.test_panel
+         FROM lab_orders lo
+         LEFT JOIN patients p ON lo.patient_id = p.patient_id
+         WHERE lo.order_id = ?`,
         [order_id]
       );
 
       if (orderInfo.length > 0 && orderInfo[0].ordering_provider_id) {
-        // TODO: Implement notification system (P5.4)
-        // For now, we'll just log it
-        console.log(`CRITICAL VALUE ALERT: Lab result ${result_id} for order ${order_id} is critical. Provider: ${orderInfo[0].ordering_provider_id}`);
-        
-        // Update critical_alert_sent flag (will be set to true when notification is actually sent)
-        // For now, we'll leave it as false until notification system is implemented
+        const providerId = orderInfo[0].ordering_provider_id;
+        const patientName = orderInfo[0].patient_name || 'Patient';
+        const testPanel = orderInfo[0].test_panel || test_name;
+
+        try {
+          // Send critical alert notification to ordering provider
+          const notificationResult = await createNotification({
+            recipient_id: providerId,
+            patient_id: patient_id,
+            title: 'Critical Lab Value Alert',
+            message: `CRITICAL: Lab result for ${test_name} (${testPanel}) for patient ${patientName} is outside normal range. Result: ${result_value}${unit ? ' ' + unit : ''}. Please review immediately.`,
+            type: 'alert',
+            payload: JSON.stringify({
+              type: 'critical_lab_alert',
+              result_id: result_id,
+              order_id: order_id,
+              patient_id: patient_id,
+              test_name: test_name,
+              result_value: result_value,
+              unit: unit,
+              reference_range_min: reference_range_min,
+              reference_range_max: reference_range_max,
+            })
+          });
+
+          if (notificationResult.success) {
+            // Update critical_alert_sent flag to true
+            await connection.query(
+              'UPDATE lab_results SET critical_alert_sent = 1 WHERE result_id = ?',
+              [result_id]
+            );
+
+            // Log notification to audit log
+            const userInfo = await getUserInfoForAudit(req.user.user_id);
+            await logAudit({
+              user_id: userInfo.user_id,
+              user_name: userInfo.user_name,
+              user_role: userInfo.user_role,
+              action: 'NOTIFY',
+              module: 'Lab Results',
+              entity_type: 'lab_result',
+              entity_id: result_id,
+              record_id: result_id,
+              new_value: {
+                result_id,
+                critical_alert_sent: true,
+                notified_provider: providerId,
+              },
+              change_summary: `Critical lab value alert sent to provider for ${test_name}`,
+              ip_address: getClientIp(req),
+              user_agent: req.headers['user-agent'] || 'unknown',
+              status: 'success',
+            });
+
+            console.log(`Critical alert notification sent to provider ${providerId} for lab result ${result_id}`);
+          } else {
+            console.error('Failed to send critical alert notification:', notificationResult.error);
+            // Don't fail the request if notification fails, but log it
+          }
+        } catch (notificationError) {
+          console.error('Error sending critical alert notification:', notificationError);
+          // Don't fail the request if notification fails
+        }
       }
     }
 
@@ -639,6 +711,82 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
       updateFields.push('is_critical = ?');
       updateValues.push(is_critical ? 1 : 0);
+
+      // If result becomes critical and alert hasn't been sent, send notification
+      if (is_critical && oldResult.critical_alert_sent === 0) {
+        // Get ordering provider and patient info from lab order
+        const [orderInfo] = await connection.query(
+          `SELECT lo.ordering_provider_id, 
+                  CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+                  lo.test_panel
+           FROM lab_orders lo
+           LEFT JOIN patients p ON lo.patient_id = p.patient_id
+           WHERE lo.order_id = ?`,
+          [oldResult.order_id]
+        );
+
+        if (orderInfo.length > 0 && orderInfo[0].ordering_provider_id) {
+          const providerId = orderInfo[0].ordering_provider_id;
+          const patientName = orderInfo[0].patient_name || 'Patient';
+          const testPanel = orderInfo[0].test_panel || oldResult.test_name;
+
+          try {
+            // Send critical alert notification to ordering provider
+            const notificationResult = await createNotification({
+              recipient_id: providerId,
+              patient_id: oldResult.patient_id,
+              title: 'Critical Lab Value Alert',
+              message: `CRITICAL: Lab result for ${oldResult.test_name} (${testPanel}) for patient ${patientName} is outside normal range. Result: ${finalResultValue}${oldResult.unit ? ' ' + oldResult.unit : ''}. Please review immediately.`,
+              type: 'alert',
+              payload: JSON.stringify({
+                type: 'critical_lab_alert',
+                result_id: result_id,
+                order_id: oldResult.order_id,
+                patient_id: oldResult.patient_id,
+                test_name: oldResult.test_name,
+                result_value: finalResultValue,
+                unit: oldResult.unit,
+                reference_range_min: finalMin,
+                reference_range_max: finalMax,
+              })
+            });
+
+            if (notificationResult.success) {
+              // Update critical_alert_sent flag to true
+              updateFields.push('critical_alert_sent = 1');
+              
+              // Log notification to audit log
+              const userInfo = await getUserInfoForAudit(req.user.user_id);
+              await logAudit({
+                user_id: userInfo.user_id,
+                user_name: userInfo.user_name,
+                user_role: userInfo.user_role,
+                action: 'NOTIFY',
+                module: 'Lab Results',
+                entity_type: 'lab_result',
+                entity_id: result_id,
+                record_id: result_id,
+                new_value: {
+                  result_id,
+                  critical_alert_sent: true,
+                  notified_provider: providerId,
+                },
+                change_summary: `Critical lab value alert sent to provider for ${oldResult.test_name}`,
+                ip_address: getClientIp(req),
+                user_agent: req.headers['user-agent'] || 'unknown',
+                status: 'success',
+              });
+
+              console.log(`Critical alert notification sent to provider ${providerId} for lab result ${result_id}`);
+            } else {
+              console.error('Failed to send critical alert notification:', notificationResult.error);
+            }
+          } catch (notificationError) {
+            console.error('Error sending critical alert notification:', notificationError);
+            // Don't fail the request if notification fails
+          }
+        }
+      }
     }
 
     if (updateFields.length === 0) {
@@ -657,6 +805,20 @@ router.put('/:id', authenticateToken, async (req, res) => {
     );
 
     await connection.commit();
+
+    // Auto-calculate ARPA risk score after lab result update
+    try {
+      const [patientCheck] = await connection.query(
+        'SELECT patient_id FROM lab_results WHERE result_id = ?',
+        [req.params.id]
+      );
+      if (patientCheck.length > 0) {
+        await calculateARPARiskScore(patientCheck[0].patient_id, req.user.user_id, { skipAudit: false });
+      }
+    } catch (arpaError) {
+      console.error('ARPA auto-calculation error after lab result update:', arpaError);
+      // Don't fail the request if ARPA calculation fails
+    }
 
     // Get updated result
     const [updatedResults] = await connection.query(
@@ -831,7 +993,233 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/lab-results/critical/pending - Get all pending critical alerts (P5.4)
+router.get('/critical/pending', authenticateToken, async (req, res) => {
+  try {
+    // Check permissions - only admins, physicians, and lab personnel can view
+    if (!['admin', 'physician', 'lab_personnel'].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only administrators, physicians, and lab personnel can view critical alerts.',
+      });
+    }
+
+    const query = `
+      SELECT 
+        lr.*,
+        CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+        CONCAT(u1.full_name) AS created_by_name,
+        CONCAT(u2.full_name) AS reviewer_name,
+        CONCAT(u3.full_name) AS ordering_provider_name,
+        lo.test_panel AS order_test_panel,
+        lo.order_date,
+        lo.ordering_provider_id
+      FROM lab_results lr
+      LEFT JOIN patients p ON lr.patient_id = p.patient_id
+      LEFT JOIN users u1 ON lr.created_by = u1.user_id
+      LEFT JOIN users u2 ON lr.reviewer_id = u2.user_id
+      LEFT JOIN lab_orders lo ON lr.order_id = lo.order_id
+      LEFT JOIN users u3 ON lo.ordering_provider_id = u3.user_id
+      WHERE lr.is_critical = 1 AND lr.critical_alert_sent = 0
+      ORDER BY lr.reported_at DESC, lr.created_at DESC
+    `;
+
+    const [results] = await db.query(query);
+
+    const formattedResults = results.map(result => ({
+      id: result.result_id,
+      result_id: result.result_id,
+      order_id: result.order_id,
+      patient: result.patient_name || 'Unknown Patient',
+      patient_id: result.patient_id,
+      testName: result.test_name,
+      test_code: result.test_code,
+      result: result.unit 
+        ? `${result.result_value} ${result.unit}`
+        : result.result_value,
+      result_value: result.result_value,
+      unit: result.unit,
+      date: result.reported_at ? new Date(result.reported_at).toLocaleDateString() : '',
+      reported_at: result.reported_at,
+      collected_at: result.collected_at,
+      labCode: `LAB-${result.reported_at ? new Date(result.reported_at).getFullYear() : '2025'}-${result.result_id.substring(0, 8).toUpperCase()}`,
+      status: 'completed',
+      priority: 'routine',
+      notes: result.notes,
+      performedBy: result.created_by_name || 'Unknown',
+      created_by: result.created_by,
+      reviewer: result.reviewer_name,
+      reviewer_id: result.reviewer_id,
+      reviewed_at: result.reviewed_at,
+      is_critical: true,
+      critical_alert_sent: false,
+      reference_range_min: result.reference_range_min,
+      reference_range_max: result.reference_range_max,
+      reference_range_text: result.reference_range_text,
+      ordering_provider_id: result.ordering_provider_id,
+      ordering_provider_name: result.ordering_provider_name || 'Unknown Provider',
+      created_at: result.created_at
+    }));
+
+    res.json({ success: true, data: formattedResults });
+  } catch (err) {
+    console.error('Fetch pending critical alerts error:', err);
+    res.status(500).json({ success: false, message: 'Server error', error: err.message });
+  }
+});
+
+// POST /api/lab-results/:id/send-critical-alert - Manually send critical alert (P5.4)
+router.post('/:id/send-critical-alert', authenticateToken, async (req, res) => {
+  const connection = await db.getConnection();
+  
+  try {
+    await connection.beginTransaction();
+
+    // Check permissions - only admins, physicians, and lab personnel can send alerts
+    if (!['admin', 'physician', 'lab_personnel'].includes(req.user.role)) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only administrators, physicians, and lab personnel can send critical alerts.',
+      });
+    }
+
+    const result_id = req.params.id;
+
+    // Get lab result and order info
+    const [results] = await connection.query(
+      `SELECT lr.*, 
+              CONCAT(p.first_name, ' ', p.last_name) AS patient_name,
+              lo.ordering_provider_id,
+              lo.test_panel
+       FROM lab_results lr
+       LEFT JOIN patients p ON lr.patient_id = p.patient_id
+       LEFT JOIN lab_orders lo ON lr.order_id = lo.order_id
+       WHERE lr.result_id = ?`,
+      [result_id]
+    );
+
+    if (results.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'Lab result not found',
+      });
+    }
+
+    const result = results[0];
+
+    if (!result.is_critical) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'This lab result is not marked as critical',
+      });
+    }
+
+    if (result.critical_alert_sent) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Critical alert has already been sent for this result',
+      });
+    }
+
+    if (!result.ordering_provider_id) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'No ordering provider found for this lab result',
+      });
+    }
+
+    const providerId = result.ordering_provider_id;
+    const patientName = result.patient_name || 'Patient';
+    const testPanel = result.test_panel || result.test_name;
+
+    // Send critical alert notification to ordering provider
+    const notificationResult = await createNotification({
+      recipient_id: providerId,
+      patient_id: result.patient_id,
+      title: 'Critical Lab Value Alert',
+      message: `CRITICAL: Lab result for ${result.test_name} (${testPanel}) for patient ${patientName} is outside normal range. Result: ${result.result_value}${result.unit ? ' ' + result.unit : ''}. Please review immediately.`,
+      type: 'alert',
+      payload: JSON.stringify({
+        type: 'critical_lab_alert',
+        result_id: result_id,
+        order_id: result.order_id,
+        patient_id: result.patient_id,
+        test_name: result.test_name,
+        result_value: result.result_value,
+        unit: result.unit,
+        reference_range_min: result.reference_range_min,
+        reference_range_max: result.reference_range_max,
+      })
+    });
+
+    if (!notificationResult.success) {
+      await connection.rollback();
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send critical alert notification',
+        error: notificationResult.error,
+      });
+    }
+
+    // Update critical_alert_sent flag to true
+    await connection.query(
+      'UPDATE lab_results SET critical_alert_sent = 1 WHERE result_id = ?',
+      [result_id]
+    );
+
+    await connection.commit();
+
+    // Log notification to audit log
+    const userInfo = await getUserInfoForAudit(req.user.user_id);
+    await logAudit({
+      user_id: userInfo.user_id,
+      user_name: userInfo.user_name,
+      user_role: userInfo.user_role,
+      action: 'NOTIFY',
+      module: 'Lab Results',
+      entity_type: 'lab_result',
+      entity_id: result_id,
+      record_id: result_id,
+      new_value: {
+        result_id,
+        critical_alert_sent: true,
+        notified_provider: providerId,
+      },
+      change_summary: `Manually sent critical lab value alert to provider for ${result.test_name}`,
+      ip_address: getClientIp(req),
+      user_agent: req.headers['user-agent'] || 'unknown',
+      status: 'success',
+    });
+
+    res.json({
+      success: true,
+      message: 'Critical alert notification sent successfully',
+      data: {
+        result_id,
+        notification_id: notificationResult.notification_id,
+        provider_id: providerId,
+      }
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Send critical alert error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: err.message,
+    });
+  } finally {
+    connection.release();
+  }
+});
+
 export default router;
+
 
 
 

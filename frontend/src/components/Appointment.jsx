@@ -624,6 +624,15 @@ const Appointments = ({ socket }) => {
             const dayAppointments = getAppointmentsForDay(day);
             const isToday = isCurrentMonth && day === todayDate;
             const isSelected = selectedDay === day;
+            const hasAppointments = dayAppointments.length > 0;
+            
+            // Get scheduled times for display (only show active appointments)
+            const activeAppointments = dayAppointments.filter(a => 
+                a.status === 'scheduled' || 
+                a.status === 'confirmed' || 
+                a.status === 'pending_provider_confirmation' || 
+                a.status === 'pending_patient_confirmation'
+            );
             
             days.push(
                 <div 
@@ -635,21 +644,22 @@ const Appointments = ({ socket }) => {
                         border: isToday ? '2px solid #D84040' : '1px solid #ECDCBF',
                         borderRadius: '8px',
                         backgroundColor: isSelected ? '#F8F2DE' : 'white',
-                        cursor: 'pointer',
+                        cursor: hasAppointments ? 'pointer' : 'default', // Only show pointer if there are appointments
                         position: 'relative',
                         overflow: 'hidden',
                         transition: 'all 0.2s ease',
                         boxShadow: isSelected ? '0 4px 8px rgba(216, 64, 64, 0.15)' : 'none'
                     }}
                     onMouseEnter={(e) => {
-                        if (!isSelected) {
+                        // Only show hover effect if there are appointments
+                        if (hasAppointments && !isSelected) {
                             e.target.style.backgroundColor = '#F8F2DE';
                             e.target.style.transform = 'translateY(-2px)';
                             e.target.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
                         }
                     }}
                     onMouseLeave={(e) => {
-                        if (!isSelected) {
+                        if (hasAppointments && !isSelected) {
                             e.target.style.backgroundColor = 'white';
                             e.target.style.transform = 'translateY(0)';
                             e.target.style.boxShadow = 'none';
@@ -664,14 +674,15 @@ const Appointments = ({ socket }) => {
                     }}>
                         {day}
                     </div>
-                    {dayAppointments.length > 0 && (
+                    {hasAppointments && (
                         <div style={{
                             fontSize: '11px',
                             color: '#A31D1D',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
-                            fontWeight: '500'
+                            fontWeight: '500',
+                            marginBottom: '3px'
                         }}>
                             {dayAppointments.length > 1 ? 
                                 `${dayAppointments.length} appointments` : 
@@ -679,7 +690,55 @@ const Appointments = ({ socket }) => {
                             }
                         </div>
                     )}
-                    {dayAppointments.length > 0 && (
+                    {/* Show green time indicators for scheduled appointments */}
+                    {activeAppointments.length > 0 && (
+                        <div style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: '2px',
+                            marginTop: '2px'
+                        }}>
+                            {activeAppointments.slice(0, 3).map((apt, idx) => {
+                                const startDate = new Date(apt.scheduled_start);
+                                const timeStr = startDate.toLocaleTimeString('en-US', { 
+                                    hour: '2-digit', 
+                                    minute: '2-digit',
+                                    hour12: false 
+                                });
+                                return (
+                                    <div
+                                        key={idx}
+                                        style={{
+                                            backgroundColor: '#28a745',
+                                            color: 'white',
+                                            fontSize: '9px',
+                                            padding: '2px 4px',
+                                            borderRadius: '3px',
+                                            fontWeight: '600',
+                                            lineHeight: '1.2'
+                                        }}
+                                        title={`${timeStr} - ${apt.patient_name || 'Appointment'}`}
+                                    >
+                                        {timeStr}
+                                    </div>
+                                );
+                            })}
+                            {activeAppointments.length > 3 && (
+                                <div style={{
+                                    backgroundColor: '#28a745',
+                                    color: 'white',
+                                    fontSize: '9px',
+                                    padding: '2px 4px',
+                                    borderRadius: '3px',
+                                    fontWeight: '600'
+                                }}>
+                                    +{activeAppointments.length - 3}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {/* Status indicator dot */}
+                    {hasAppointments && (
                         <div style={{
                             position: 'absolute',
                             bottom: '5px',
@@ -687,12 +746,7 @@ const Appointments = ({ socket }) => {
                             width: '8px',
                             height: '8px',
                             borderRadius: '50%',
-                            backgroundColor: dayAppointments.some(a => 
-                                a.status === 'scheduled' || 
-                                a.status === 'confirmed' || 
-                                a.status === 'pending_provider_confirmation' || 
-                                a.status === 'pending_patient_confirmation'
-                            ) ? '#28a745' : (
+                            backgroundColor: activeAppointments.length > 0 ? '#28a745' : (
                                 dayAppointments.some(a => 
                                     a.status === 'cancelled' || 
                                     a.status === 'rejected'
