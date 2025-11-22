@@ -20,7 +20,7 @@ import {
   ExpandMore as ExpandMoreIcon,
   Person as PersonIcon,
   Comment as CommentIcon,
-  CalendarToday as CalendarIcon,
+  CalendarToday,
   Book as BookIcon,
   DirectionsRun as RunIcon,
   Medication as MedicationIcon,

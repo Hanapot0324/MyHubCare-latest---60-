@@ -7,7 +7,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import NotificationSystem from './NotificationSystem';
 import NotificationSystemStaff from './NotificationSystemStaff';
 import NotificationSystemPatient from './NotificationSystemPatient';
-import logoImage from '../assets/logo.png';
+import logoImage from '../assets/logowoname.png';
 
 const Logo = () => (
   <img
@@ -52,19 +52,6 @@ const Header = ({ socket }) => {
     }
   }, []);
 
-  const handleProfileMenuOpen = (event) => {
-    setAnchorEl(event.currentTarget);
-  };
-
-  const handleMenuClose = () => {
-    setAnchorEl(null);
-  };
-
-  // Get the current page name from the path
-  const getCurrentPageName = () => {
-    return pathNames[location.pathname] || 'Dashboard';
-  };
-
   return (
     <AppBar
       position="fixed"
@@ -78,12 +65,15 @@ const Header = ({ socket }) => {
       <Toolbar>
         <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1 }}>
           <Logo />
-          <Typography variant="h6" noWrap component="div" sx={{ mr: 1 }}>
+          <Typography 
+            variant="h6" 
+            noWrap 
+            component="div" 
+            sx={{ 
+              marginTop: '10px', 
+            }}
+          >
             My Hub Cares
-          </Typography>
-          <MenuIcon size={20} color="#000000" style={{ margin: '0 30px' }} />
-          <Typography variant="h6" noWrap component="div" color="black">
-            {getCurrentPageName()}
           </Typography>
         </Box>
 
@@ -93,7 +83,7 @@ const Header = ({ socket }) => {
           ) : (
             <NotificationSystemStaff socket={socket} />
           )}
-          <Avatar
+          {/* <Avatar
             sx={{
               bgcolor: '#D84040',
               ml: 1,
@@ -101,7 +91,7 @@ const Header = ({ socket }) => {
             }}
           >
             <AccountCircle />
-          </Avatar>
+          </Avatar> */}
         </Box>
       </Toolbar>
     </AppBar>

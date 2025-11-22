@@ -58,18 +58,34 @@ const Settings = () => {
   const isPatient = userRole === 'patient';
 
   return (
-    <div style={{ padding: '20px', paddingTop: '20px' }}>
-      {/* Header */}
-      <div style={{ marginBottom: '30px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-          <SettingsIcon size={28} color="#D84040" />
-          <h2 style={{ margin: 0, color: '#333', fontSize: '28px' }}>Settings</h2>
+    <div
+      style={{
+        padding: '20px',
+        backgroundColor: 'white',
+        minHeight: '100vh',
+        paddingTop: '100px',
+      }}
+    >
+      {/* Header - Matching Other Components Style */}
+      <div style={{ 
+        marginBottom: '30px', 
+        background: 'linear-gradient(to right, #D84040, #A31D1D)', 
+        padding: '30px', 
+        borderRadius: '12px', 
+        boxShadow: '0 4px 15px rgba(216, 64, 64, 0.2)' 
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ margin: '0 0 5px 0', color: 'white', fontSize: '24px', fontWeight: 'bold' }}>
+              Settings
+            </h2>
+            <p style={{ margin: 0, color: '#F8F2DE', fontSize: '16px' }}>
+              {isPatient
+                ? 'Manage your account settings and password'
+                : 'Manage system settings, users, roles, and permissions'}
+            </p>
+          </div>
         </div>
-        <p style={{ margin: '5px 0 0 0', color: '#6c757d', fontSize: '14px' }}>
-          {isPatient
-            ? 'Manage your account settings and password'
-            : 'Manage system settings, users, roles, and permissions'}
-        </p>
       </div>
 
       {/* Tabs */}
@@ -215,4 +231,3 @@ const Settings = () => {
 };
 
 export default Settings;
-

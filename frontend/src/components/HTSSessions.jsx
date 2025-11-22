@@ -569,54 +569,59 @@ const HTSSessions = () => {
   };
 
   return (
-    <div style={styles.pageContainer}>
-      {/* Header - Matching Dashboard Style */}
-      <div style={{ 
-        marginBottom: '30px', 
-        background: 'linear-gradient(to right, #D84040, #A31D1D)', 
-        padding: '30px', 
-        borderRadius: '12px', 
-        boxShadow: '0 4px 15px rgba(216, 64, 64, 0.2)' 
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h2 style={{ margin: '0 0 5px 0', color: 'white', fontSize: '24px', fontWeight: 'bold' }}>
-              HIV Testing Services (HTS)
-            </h2>
-            <p style={{ margin: 0, color: '#F8F2DE', fontSize: '16px' }}>
-              HIV testing sessions and counseling
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button
-              onClick={() => setShowModal(true)}
-              style={{
-                padding: '10px 16px',
-                background: '#ECDCBF',
-                color: '#A31D1D',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
-                fontWeight: '500',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px'
-              }}
-              onMouseEnter={(e) => {
-                e.target.style.background = '#F8F2DE';
-                e.target.style.transform = 'translateY(-1px)';
-              }}
-              onMouseLeave={(e) => {
-                e.target.style.background = '#ECDCBF';
-                e.target.style.transform = 'translateY(0)';
-              }}
-            >
-              Record HTS Session
-            </button>
-          </div>
+  <div style={{
+    padding: '20px',
+    backgroundColor: 'white',
+    minHeight: '100vh',
+    paddingTop: '100px',
+  }}>
+    {/* Header - Matching Dashboard Style */}
+    <div style={{ 
+      marginBottom: '30px', 
+      background: 'linear-gradient(to right, #D84040, #A31D1D)', 
+      padding: '30px', 
+      borderRadius: '12px', 
+      boxShadow: '0 4px 15px rgba(216, 64, 64, 0.2)' 
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 style={{ margin: '0 0 5px 0', color: 'white', fontSize: '24px', fontWeight: 'bold' }}>
+            HIV Testing Services (HTS)
+          </h2>
+          <p style={{ margin: 0, color: '#F8F2DE', fontSize: '16px' }}>
+            HIV testing sessions and counseling
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={() => setShowModal(true)}
+            style={{
+              padding: '10px 16px',
+              background: '#ECDCBF',
+              color: '#A31D1D',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              fontWeight: '500',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+            onMouseEnter={(e) => {
+              e.target.style.background = '#F8F2DE';
+              e.target.style.transform = 'translateY(-1px)';
+            }}
+            onMouseLeave={(e) => {
+              e.target.style.background = '#ECDCBF';
+              e.target.style.transform = 'translateY(0)';
+            }}
+          >
+            Record HTS Session
+          </button>
         </div>
       </div>
+    </div>
 
       {/* Sessions Card */}
       <div style={styles.card}>
